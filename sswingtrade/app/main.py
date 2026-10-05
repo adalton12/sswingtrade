@@ -11,12 +11,14 @@ from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.config import settings
 from app.database import engine, get_db, init_db
 from app.routes import health, capital, market_data
 from app.services.logger import setup_logging
+from app.services.cache import cache
 from app.services.scheduler import start_scheduler, stop_scheduler
 
 # Setup logging
@@ -48,6 +50,12 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("✅ Database initialized")
 
+        # Connect Redis (non-fatal: cache helpers degrade gracefully)
+        try:
+            await cache.connect()
+        except Exception as e:
+            logger.warning(f"Redis unavailable, continuing without cache: {e}")
+
         # Start market data scheduler (FASE 2)
         if settings.SCHEDULER_ENABLED:
             await start_scheduler()
@@ -62,6 +70,7 @@ async def lifespan(app: FastAPI):
     # Shutdown scheduler
     if settings.SCHEDULER_ENABLED:
         await stop_scheduler()
+    await cache.disconnect()
 
     logger.info("🛑 Shutting down SSWingTrade Application")
 
@@ -102,23 +111,10 @@ async def root():
     }
 
 
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
+@app.get("/health", tags=["Health"])
 async def health_check():
-    """
-    Health check endpoint with dependency status.
-
-    Returns:
-        HealthResponse: Current system health status
-    """
-    health_status = await health.check_system_health()
-
-    if health_status["status"] == "unhealthy":
-        raise HTTPException(
-            status_code=503,
-            detail="System unhealthy - check dependencies"
-        )
-
-    return health_status
+    """Health check (used by Docker HEALTHCHECK). Delegates to the router."""
+    return await health.health_check()
 
 
 # Include routers
@@ -135,22 +131,28 @@ app.include_router(market_data.router, prefix="/api/v1/market", tags=["Market Da
 async def http_exception_handler(request, exc):
     """Global HTTP exception handler with logging."""
     logger.error(f"HTTP {exc.status_code}: {exc.detail}")
-    return {
-        "error": exc.detail,
-        "status_code": exc.status_code,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    )
 
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
     """Global exception handler for unexpected errors."""
     logger.exception(f"Unexpected error: {exc}")
-    return {
-        "error": "Internal server error",
-        "status_code": 500,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    )
 
 
 if __name__ == "__main__":

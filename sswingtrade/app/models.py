@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Float,
     Integer,
+    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -27,6 +28,11 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
 Base = declarative_base()
+
+
+def _utcnow() -> datetime:
+    """Module-level helper (class bodies may shadow the datetime name)."""
+    return datetime.utcnow()
 
 
 class OrderStatus(PyEnum):
@@ -76,7 +82,7 @@ class MarketCandle(Base):
     high_price = Column(Numeric(10, 2), nullable=False)
     low_price = Column(Numeric(10, 2), nullable=False)
     close_price = Column(Numeric(10, 2), nullable=False)
-    volume = Column(Integer, nullable=False)
+    volume = Column(BigInteger, nullable=False)
 
     # Metadata
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -161,7 +167,7 @@ class CapitalHistory(Base):
     balance_after = Column(Numeric(15, 2), nullable=False)
 
     description = Column(Text)
-    metadata = Column(JSON)  # Additional context
+    extra_data = Column("metadata", JSON)  # Additional context (attr renamed: "metadata" is reserved)
 
     date = Column(DateTime, default=datetime.utcnow)
 
@@ -215,7 +221,7 @@ class Position(Base):
     # Status
     status = Column(Enum(PositionStatus), default=PositionStatus.OPEN)
 
-    metadata = Column(JSON)  # Store strategy id, model version, etc.
+    extra_data = Column("metadata", JSON)  # Strategy id, model version, etc.
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -288,9 +294,9 @@ class IntradayCandle(Base):
     high_price = Column(Numeric(10, 2), nullable=False)
     low_price = Column(Numeric(10, 2), nullable=False)
     close_price = Column(Numeric(10, 2), nullable=False)
-    volume = Column(Integer, nullable=False)
+    volume = Column(BigInteger, nullable=False)
 
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
 class CollectionLog(Base):

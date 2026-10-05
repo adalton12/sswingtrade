@@ -6,7 +6,7 @@ FASE 1: PostgreSQL + SQLAlchemy ORM + Alembic migrations
 import asyncio
 from typing import AsyncGenerator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -38,7 +38,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 # Sync engine for Alembic migrations
 engine = create_engine(
-    settings.DATABASE_URL,
+    settings.DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://"),
     echo=settings.DATABASE_ECHO,
     pool_size=settings.DATABASE_POOL_SIZE,
     pool_recycle=settings.DATABASE_POOL_RECYCLE,
@@ -106,7 +106,7 @@ async def check_database_health() -> dict:
     """
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
 
         return {
             "status": "healthy",

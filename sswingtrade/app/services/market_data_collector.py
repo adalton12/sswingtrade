@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import yfinance as yf
-from sqlalchemy import select, and_, text
+from sqlalchemy import select, and_, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -169,102 +169,68 @@ def _fetch_ticker_info(ticker: str) -> Optional[dict]:
 # Database Persistence
 # ============================================================================
 
-async def _save_daily_candles(
-    session: AsyncSession,
-    ticker: str,
-    df: pd.DataFrame,
-) -> Tuple[int, int]:
-    """
-    Save daily candles to database using upsert (INSERT ON CONFLICT UPDATE).
-    Returns (inserted_count, updated_count).
-    """
-    inserted = 0
-    updated = 0
+def _rows_from_df(df: pd.DataFrame, key: str, ticker: str, extra: Optional[dict] = None) -> List[dict]:
+    """Convert OHLCV DataFrame into row dicts, skipping NaN/invalid rows."""
+    rows = []
+    for ts, r in df.dropna(subset=["open", "high", "low", "close"]).iterrows():
+        row = {
+            "ticker": ticker,
+            key: ts.to_pydatetime(),
+            "open_price": round(float(r["open"]), 2),
+            "high_price": round(float(r["high"]), 2),
+            "low_price": round(float(r["low"]), 2),
+            "close_price": round(float(r["close"]), 2),
+            "volume": int(r["volume"]) if pd.notna(r["volume"]) else 0,
+        }
+        if extra:
+            row.update(extra)
+        rows.append(row)
+    return rows
 
-    for date, row in df.iterrows():
-        # Check if candle already exists
-        stmt = select(MarketCandle).where(
-            and_(
-                MarketCandle.ticker == ticker,
-                MarketCandle.date == date.to_pydatetime(),
-            )
+
+async def _bulk_upsert(session: AsyncSession, model, rows: List[dict], index_elements: List[str]) -> Tuple[int, int]:
+    """Single-statement bulk upsert. Returns (inserted, updated)."""
+    if not rows:
+        return 0, 0
+    keys = [tuple(r[k] for k in index_elements) for r in rows]
+    cols = [getattr(model, k) for k in index_elements]
+    # Count pre-existing rows to split inserted vs updated
+    existing = 0
+    for i in range(0, len(rows), 500):
+        chunk = rows[i:i + 500]
+        stmt = select(func.count()).select_from(model).where(
+            and_(cols[0] == chunk[0][index_elements[0]],
+                 *[c.in_([r[k] for r in chunk]) for c, k in zip(cols[1:], index_elements[1:])])
         )
-        result = await session.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            # Update if prices changed
-            existing.open_price = round(row["open"], 2)
-            existing.high_price = round(row["high"], 2)
-            existing.low_price = round(row["low"], 2)
-            existing.close_price = round(row["close"], 2)
-            existing.volume = int(row["volume"])
-            existing.updated_at = datetime.utcnow()
-            updated += 1
-        else:
-            candle = MarketCandle(
-                ticker=ticker,
-                date=date.to_pydatetime(),
-                open_price=round(row["open"], 2),
-                high_price=round(row["high"], 2),
-                low_price=round(row["low"], 2),
-                close_price=round(row["close"], 2),
-                volume=int(row["volume"]),
-            )
-            session.add(candle)
-            inserted += 1
-
-    await session.commit()
-    return inserted, updated
-
-
-async def _save_intraday_candles(
-    session: AsyncSession,
-    ticker: str,
-    df: pd.DataFrame,
-    interval: str = "1h",
-) -> Tuple[int, int]:
-    """
-    Save intraday candles to database using upsert.
-    Returns (inserted_count, updated_count).
-    """
-    inserted = 0
-    updated = 0
-
-    for dt, row in df.iterrows():
-        stmt = select(IntradayCandle).where(
-            and_(
-                IntradayCandle.ticker == ticker,
-                IntradayCandle.datetime == dt.to_pydatetime(),
-                IntradayCandle.interval == interval,
-            )
+        existing += (await session.execute(stmt)).scalar_one()
+    for i in range(0, len(rows), 500):
+        chunk = rows[i:i + 500]
+        ins = pg_insert(model).values(chunk)
+        stmt = ins.on_conflict_do_update(
+            index_elements=index_elements,
+            set_={
+                "open_price": ins.excluded.open_price,
+                "high_price": ins.excluded.high_price,
+                "low_price": ins.excluded.low_price,
+                "close_price": ins.excluded.close_price,
+                "volume": ins.excluded.volume,
+            },
         )
-        result = await session.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            existing.open_price = round(row["open"], 2)
-            existing.high_price = round(row["high"], 2)
-            existing.low_price = round(row["low"], 2)
-            existing.close_price = round(row["close"], 2)
-            existing.volume = int(row["volume"])
-            updated += 1
-        else:
-            candle = IntradayCandle(
-                ticker=ticker,
-                datetime=dt.to_pydatetime(),
-                interval=interval,
-                open_price=round(row["open"], 2),
-                high_price=round(row["high"], 2),
-                low_price=round(row["low"], 2),
-                close_price=round(row["close"], 2),
-                volume=int(row["volume"]),
-            )
-            session.add(candle)
-            inserted += 1
-
+        await session.execute(stmt)
     await session.commit()
-    return inserted, updated
+    return len(rows) - existing, existing
+
+
+async def _save_daily_candles(session: AsyncSession, ticker: str, df: pd.DataFrame) -> Tuple[int, int]:
+    """Upsert daily candles (ON CONFLICT ticker,date). Returns (inserted, updated)."""
+    rows = _rows_from_df(df, "date", ticker)
+    return await _bulk_upsert(session, MarketCandle, rows, ["ticker", "date"])
+
+
+async def _save_intraday_candles(session: AsyncSession, ticker: str, df: pd.DataFrame, interval: str = "1h") -> Tuple[int, int]:
+    """Upsert intraday candles (ON CONFLICT ticker,datetime,interval)."""
+    rows = _rows_from_df(df, "datetime", ticker, {"interval": interval})
+    return await _bulk_upsert(session, IntradayCandle, rows, ["ticker", "datetime", "interval"])
 
 
 async def _save_ticker_info(session: AsyncSession, info: dict):
