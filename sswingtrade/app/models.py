@@ -362,6 +362,21 @@ class TechnicalIndicator(Base):
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
+class MLModel(Base):
+    """Registry of trained ML models (artifacts live in ML_MODEL_PATH) - FASE 5."""
+    __tablename__ = "ml_models"
+
+    id = Column(Integer, primary_key=True)
+    model_id = Column(String(120), unique=True, nullable=False)
+    target = Column(String(40), nullable=False)
+    algo = Column(String(20), nullable=False)
+    path = Column(String(500), nullable=False)
+    metrics = Column(JSON)
+    is_active = Column(Boolean, default=False)
+    trained_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
+
 # ============================================================================
 # Event & Analysis Models (FASE 6+)
 # ============================================================================

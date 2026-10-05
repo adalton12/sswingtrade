@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     INTRADAY_DEFAULT_PERIOD: str = "5d"  # Default period for intraday data
     INTRADAY_DEFAULT_INTERVAL: str = "1h"  # Default intraday interval
 
+    # ========== FASE 5: ML ==========
+    ML_MODEL_PATH: str = "/app/models"
+    ML_MIN_TRAIN_ROWS: int = 600
+
     # ========== Monitoring & Observability ==========
     PROMETHEUS_ENABLED: bool = True
     PROMETHEUS_METRICS_PORT: int = 9090

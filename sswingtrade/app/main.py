@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import engine, get_db, init_db
-from app.routes import health, capital, market_data, indicators, backtest
+from app.routes import health, capital, market_data, indicators, backtest, ml
 from app.services.logger import setup_logging
 from app.services.cache import cache
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -125,6 +125,7 @@ app.include_router(market_data.router, prefix="/api/v1/market", tags=["Market Da
 
 app.include_router(indicators.router, prefix="/api/v1/indicators", tags=["Indicators"])
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtesting"])
+app.include_router(ml.router, prefix="/api/v1/ml", tags=["Machine Learning"])
 
 
 # ============================================================================
