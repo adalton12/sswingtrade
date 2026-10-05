@@ -325,6 +325,43 @@ class CollectionLog(Base):
     metadata_extra = Column(JSON)  # Additional context
 
 
+class TechnicalIndicator(Base):
+    """Daily technical indicators computed locally from market_candles (FASE 3)."""
+    __tablename__ = "technical_indicators"
+    __table_args__ = (
+        UniqueConstraint("ticker", "date", name="uq_indicator_ticker_date"),
+        Index("ix_indicator_ticker_date", "ticker", "date"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String(10), nullable=False)
+    date = Column(DateTime, nullable=False)
+
+    close = Column(Float)
+    sma_5 = Column(Float)
+    sma_10 = Column(Float)
+    sma_20 = Column(Float)
+    sma_50 = Column(Float)
+    ema_9 = Column(Float)
+    ema_21 = Column(Float)
+    rsi_14 = Column(Float)
+    macd = Column(Float)
+    macd_signal = Column(Float)
+    macd_hist = Column(Float)
+    atr_14 = Column(Float)
+    bb_upper = Column(Float)
+    bb_middle = Column(Float)
+    bb_lower = Column(Float)
+    bb_pctb = Column(Float)
+    vwap_20 = Column(Float)
+    volume_sma_20 = Column(Float)
+    volume_change = Column(Float)
+    volume_ratio = Column(Float)
+    technical_score = Column(Float)  # 0-100
+
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
 # ============================================================================
 # Event & Analysis Models (FASE 6+)
 # ============================================================================

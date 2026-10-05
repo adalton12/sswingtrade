@@ -49,6 +49,17 @@ async def job_collect_daily():
         logger.error(f"⏰ Scheduler: Daily collection FAILED - {e}")
 
 
+async def job_compute_indicators():
+    """Scheduled job: recompute indicators after daily candles are stored."""
+    logger.info("⏰ Scheduler: Computing indicators")
+    try:
+        from app.services.indicator_service import compute_many
+        result = await compute_many(DEFAULT_TICKERS, days=5)
+        logger.info(f"⏰ Scheduler: Indicators done - {len(result['computed'])} ok, {len(result['failed'])} failed")
+    except Exception as e:
+        logger.error(f"⏰ Scheduler: Indicator computation FAILED - {e}")
+
+
 async def job_collect_intraday():
     """Scheduled job: collect intraday (1h) candles after market close."""
     logger.info("⏰ Scheduler: Starting intraday candle collection")
@@ -117,6 +128,16 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # Indicators - weekdays at 19:00 BRT (after daily candles)
+    scheduler.add_job(
+        job_compute_indicators,
+        CronTrigger(day_of_week="mon-fri", hour=19, minute=0, timezone=settings.MARKET_TIMEZONE),
+        id="compute_indicators",
+        name="Compute Technical Indicators",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     # Weekend catch-up - Saturday at 10:00 BRT
     scheduler.add_job(
         job_weekend_catchup,
@@ -132,7 +153,7 @@ def setup_scheduler():
         misfire_grace_time=7200,
     )
 
-    logger.info("⏰ Scheduler configured with 3 jobs:")
+    logger.info("⏰ Scheduler configured with 4 jobs:")
     logger.info("  - Daily candles: Mon-Fri 18:30 BRT")
     logger.info("  - Intraday candles: Mon-Fri 18:45 BRT")
     logger.info("  - Weekend catch-up: Sat 10:00 BRT")
