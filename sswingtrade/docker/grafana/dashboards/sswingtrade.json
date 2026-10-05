@@ -1,0 +1,213 @@
+{
+ "uid": "sswingtrade-main",
+ "title": "SSWingTrade - Paper Trading",
+ "tags": [
+  "sswingtrade"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "1m",
+ "time": {
+  "from": "now-90d",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "title": "Patrimônio (R$)",
+   "type": "timeseries",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 16,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "time_series",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT date AS \"time\", balance_after AS \"Patrimônio\" FROM capital_history WHERE $__timeFilter(date) ORDER BY date"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "title": "Patrimônio atual",
+   "type": "stat",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT current_balance AS \"Patrimônio\" FROM accounts ORDER BY id LIMIT 1"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "title": "Taxa de acerto (%)",
+   "type": "stat",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT COALESCE(100.0*SUM(CASE WHEN net_pnl>0 THEN 1 ELSE 0 END)/NULLIF(COUNT(*),0),0) AS \"Acerto\" FROM positions WHERE status='CLOSED'"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "title": "P&L realizado acumulado",
+   "type": "stat",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 4,
+    "w": 8,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT COALESCE(SUM(net_pnl),0) AS \"P&L realizado\" FROM positions WHERE status='CLOSED'"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "title": "P&L por operação fechada",
+   "type": "barchart",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT exit_date AS \"time\", ticker, net_pnl FROM positions WHERE status='CLOSED' AND $__timeFilter(exit_date) ORDER BY exit_date"
+    }
+   ]
+  },
+  {
+   "id": 6,
+   "title": "Posições abertas",
+   "type": "table",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT ticker, quantity AS qtd, entry_price AS entrada, stop_loss_price AS stop, take_profit_price AS alvo, entry_date AS desde FROM positions WHERE status='OPEN' ORDER BY entry_date"
+    }
+   ]
+  },
+  {
+   "id": 7,
+   "title": "Decisões recentes",
+   "type": "table",
+   "datasource": {
+    "type": "postgres",
+    "uid": "sswingtrade-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 17,
+    "w": 24,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "sswingtrade-pg"
+     },
+     "format": "table",
+     "rawQuery": true,
+     "editorMode": "code",
+     "rawSql": "SELECT signal_date AS data, ticker, round(composite_score::numeric,1) AS score, approved AS aprovada, reasons->>0 AS motivo FROM decision_log ORDER BY signal_date DESC, composite_score DESC LIMIT 50"
+    }
+   ]
+  }
+ ]
+}

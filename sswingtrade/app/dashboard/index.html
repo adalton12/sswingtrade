@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSWingTrade — Dashboard</title>
+<style>
+  :root{--bg:#0f1419;--card:#18202a;--line:#263241;--txt:#e6edf3;--mut:#8b9bb0;--pos:#2ecc71;--neg:#ff5c5c;--acc:#4da3ff;--warn:#f5b942}
+  @media (prefers-color-scheme: light){:root{--bg:#f4f6f9;--card:#fff;--line:#dde3ea;--txt:#18212b;--mut:#5d6b7c;--pos:#13935a;--neg:#d6383a;--acc:#1f6fd1;--warn:#b7791f}}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0} .badge{padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line);color:var(--mut)}
+  .badge.ok{color:var(--pos);border-color:var(--pos)} .badge.bad{color:var(--neg);border-color:var(--neg)} .badge.warn{color:var(--warn);border-color:var(--warn)}
+  main{padding:16px;display:grid;gap:16px;max-width:1200px;margin:0 auto}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .kpi .l{color:var(--mut);font-size:12px} .kpi .v{font-size:22px;font-weight:600;margin-top:2px}
+  .pos{color:var(--pos)} .neg{color:var(--neg)} .mut{color:var(--mut)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+  h2{font-size:14px;margin:0 0 8px;color:var(--mut);font-weight:600}
+  table{width:100%;border-collapse:collapse} th,td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left} th{color:var(--mut);font-weight:500;font-size:12px}
+  .scroll{overflow-x:auto} canvas{max-height:280px}
+  button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
+  button.sec{background:transparent;color:var(--txt);border:1px solid var(--line)} button:disabled{opacity:.5;cursor:wait}
+  footer{padding:16px;text-align:center;color:var(--mut);font-size:12px}
+  #err{display:none;background:rgba(255,92,92,.12);border:1px solid var(--neg);color:var(--neg);border-radius:8px;padding:8px 12px}
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <h1>SSWingTrade</h1><span id="mode" class="badge">—</span><span id="cb" class="badge">disjuntor</span>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="upd" class="mut"></span>
+    <button class="sec" id="btnRefresh">Atualizar</button>
+    <button id="btnCycle" title="Executa fills, saídas e novas decisões agora (paper trading)">Executar ciclo agora</button>
+  </div>
+</header>
+<main>
+  <div id="err"></div>
+  <section class="kpis">
+    <div class="card kpi"><div class="l">Patrimônio (a mercado)</div><div class="v" id="k_eq">—</div></div>
+    <div class="card kpi"><div class="l">Lucro líquido</div><div class="v" id="k_np">—</div></div>
+    <div class="card kpi"><div class="l">Retorno s/ aportes</div><div class="v" id="k_ret">—</div></div>
+    <div class="card kpi"><div class="l">Caixa / Investido</div><div class="v" id="k_cash">—</div></div>
+    <div class="card kpi"><div class="l">Realizado / Aberto</div><div class="v" id="k_pnl">—</div></div>
+    <div class="card kpi"><div class="l">Taxa de acerto</div><div class="v" id="k_wr">—</div></div>
+    <div class="card kpi"><div class="l">Orçamento por operação hoje</div><div class="v" id="k_bud">—</div></div>
+  </section>
+
+  <section class="card"><h2>Evolução do patrimônio</h2><canvas id="chart"></canvas></section>
+
+  <div class="grid2">
+    <section class="card"><h2>Posições abertas</h2><div class="scroll"><table id="t_open"></table></div></section>
+    <section class="card"><h2>Últimas operações fechadas</h2><div class="scroll"><table id="t_closed"></table></div></section>
+  </div>
+  <section class="card"><h2>Últimas decisões (score composto + Risk Engine)</h2><div class="scroll"><table id="t_dec"></table></div></section>
+  <section class="card"><h2>Agendador</h2><div class="scroll"><table id="t_sched"></table></div></section>
+</main>
+<footer>Paper trading — simulação. Resultados passados não garantem resultados futuros. Isto não é recomendação de investimento.</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const brl = v => v == null ? "—" : v.toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+const pct = v => v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(2) + "%";
+const cls = v => v == null ? "" : (v > 0 ? "pos" : v < 0 ? "neg" : "");
+let chart;
+
+function setKpi(id, text, c){ const el=$(id); el.textContent=text; el.className="v "+(c||""); }
+
+function fillTable(id, head, rows){
+  const t = $(id); t.textContent = "";
+  const hr = t.insertRow();
+  head.forEach(h => { const th=document.createElement("th"); th.textContent=h; hr.appendChild(th); });
+  if(!rows.length){ const r=t.insertRow(); const c=r.insertCell(); c.colSpan=head.length; c.className="mut"; c.textContent="Sem dados"; return; }
+  rows.forEach(cells => { const r=t.insertRow(); cells.forEach(([txt,c]) => { const td=r.insertCell(); td.textContent=txt; if(c) td.className=c; }); });
+}
+
+function render(d){
+  const m = $("mode"); m.textContent = d.mode; m.className = "badge " + (d.mode==="PAPER" ? "ok" : "warn");
+  const cb = $("cb"); cb.textContent = d.circuit_breaker.tripped ? "disjuntor ATIVO" : "disjuntor ok";
+  cb.className = "badge " + (d.circuit_breaker.tripped ? "bad" : "ok");
+  cb.title = "Perda do dia: " + brl(d.circuit_breaker.daily_pnl) + " (" + d.circuit_breaker.daily_loss_pct + "%)";
+
+  setKpi("k_eq", brl(d.mark_to_market_equity));
+  setKpi("k_np", brl(d.net_profit), cls(d.net_profit));
+  setKpi("k_ret", pct(d.return_pct), cls(d.return_pct));
+  setKpi("k_cash", brl(d.cash) + " / " + brl(d.invested));
+  setKpi("k_pnl", brl(d.realized_pnl) + " / " + brl(d.unrealized_pnl), cls(d.realized_pnl + d.unrealized_pnl));
+  setKpi("k_wr", d.win_rate == null ? "—" : d.win_rate.toFixed(1) + "% (" + d.trades_closed + ")");
+  setKpi("k_bud", brl(d.per_op_budget));
+
+  const labels = d.equity_curve.map(p => p.date.slice(0,10)), data = d.equity_curve.map(p => p.equity);
+  const col = getComputedStyle(document.documentElement).getPropertyValue("--acc").trim();
+  const mut = getComputedStyle(document.documentElement).getPropertyValue("--mut").trim();
+  if(chart) chart.destroy();
+  chart = new Chart($("chart"), {type:"line",
+    data:{labels, datasets:[{label:"Patrimônio (R$)", data, borderColor:col, backgroundColor:col+"22", fill:true, tension:.2, pointRadius:2}]},
+    options:{responsive:true, plugins:{legend:{display:false}}, scales:{x:{ticks:{color:mut}}, y:{ticks:{color:mut, callback:v=>"R$ "+v}}}}});
+
+  fillTable("t_open", ["Ativo","Qtd","Entrada","Último","Stop","Alvo","P&L","%"],
+    d.open_positions.map(p => [[p.ticker],[p.qty],[brl(p.entry)],[brl(p.last)],[brl(p.stop)],[brl(p.take_profit)],
+      [brl(p.unrealized_pnl), cls(p.unrealized_pnl)],[pct(p.pct), cls(p.pct)]]));
+  fillTable("t_closed", ["Ativo","Saída","Motivo","P&L","%"],
+    d.recent_trades.map(t => [[t.ticker],[t.exit],[t.reason||"—"],[brl(t.net_pnl), cls(t.net_pnl)],[pct(t.pct), cls(t.pct)]]));
+  fillTable("t_dec", ["Ativo","Data","Score","Decisão","Motivo da rejeição"],
+    d.latest_decisions.map(x => [[x.ticker],[x.date],[x.score==null?"—":x.score.toFixed(1)],
+      [x.approved?"aprovada":"rejeitada", x.approved?"pos":"mut"],[x.reason||"—"]]));
+  fillTable("t_sched", ["Job","Próxima execução"],
+    ((d.scheduler||{}).jobs||[]).map(j => [[j.name],[j.next_run ? j.next_run.replace("T"," ").slice(0,16) : "—"]]));
+  $("upd").textContent = "atualizado " + new Date().toLocaleTimeString("pt-BR");
+}
+
+async function load(){
+  try{
+    const r = await fetch("/api/v1/dashboard/summary"); if(!r.ok) throw new Error("HTTP "+r.status);
+    render(await r.json()); $("err").style.display="none";
+  }catch(e){ $("err").style.display="block"; $("err").textContent = "Falha ao carregar dados: " + e.message; }
+}
+
+$("btnRefresh").onclick = load;
+$("btnCycle").onclick = async () => {
+  if(!confirm("Executar o ciclo diário agora (paper trading)? Isso processa fills/saídas e cria novas ordens simuladas.")) return;
+  const b = $("btnCycle"); b.disabled = true;
+  try{
+    const r = await fetch("/api/v1/trading/cycle", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+  }catch(e){ $("err").style.display="block"; $("err").textContent = "Falha no ciclo: " + e.message; }
+  b.disabled = false; load();
+};
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

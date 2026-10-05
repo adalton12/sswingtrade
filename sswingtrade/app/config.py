@@ -71,6 +71,31 @@ class Settings(BaseSettings):
     NEWS_LOOKBACK_DAYS: int = 5
     LLM_BATCH_LIMIT: int = 40             # max news analysed per batch run (CPU inference is slow)
 
+    # ========== FASE 7/8: Capital, Risk, Paper Trading ==========
+    DEFAULT_USER_ID: str = "default"
+    WEEKLY_DEPOSIT: float = 500.0          # R$ added at the start of each week (set 0 to disable)
+    WEEKLY_DEPOSIT_ENABLED: bool = True
+    MONTHLY_DEPOSIT_ENABLED: bool = True   # uses MONTHLY_DEPOSIT (default 500)
+    MAX_ENTRIES_PER_DAY: int = 5           # daily budget can be split in up to 5 entries
+    MAX_OPEN_POSITIONS: int = 5
+    MAX_RISK_PER_TRADE_PCT: float = 2.0    # max loss at stop, % of equity
+    MIN_RISK_REWARD: float = 2.0           # minimum 1:2
+    MAX_HOLD_DAYS: int = 5
+    ADVOCATE_BLOCK_SCORE: float = 80.0     # devil's advocate counter_score that vetoes an entry
+    ORDER_EXPIRY_DAYS: int = 3
+    FEE_RATE: float = 0.000325             # B3 emolumentos + liquidacao per side
+    BROKERAGE_PER_ORDER: float = 0.0
+    SLIPPAGE_BPS: float = 5.0
+    # Composite score weights (sum = 1)
+    W_TECHNICAL: float = 0.25
+    W_NEWS: float = 0.25
+    W_ML: float = 0.30
+    W_VOLUME_MOMENTUM: float = 0.20
+    ML_PROB_FULL_SCALE: float = 0.5        # calibrated probability that maps to ML score 100
+    ML_SCORE_TARGET: str = "y_3d_2pct"
+    DAILY_CYCLE_HOUR: int = 20             # BRT: fills/exits + new decisions
+    DAILY_CYCLE_MINUTE: int = 0
+
     # ========== FASE 5: ML ==========
     ML_MODEL_PATH: str = "/app/models"
     ML_MIN_TRAIN_ROWS: int = 600

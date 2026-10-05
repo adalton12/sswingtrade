@@ -73,6 +73,34 @@ async def job_news_batch():
         logger.error(f"⏰ Scheduler: News batch FAILED - {e}")
 
 
+async def job_morning_capital():
+    """07:00 BRT: reset circuit breaker, weekly top-up (Mondays) and monthly deposit (first business day)."""
+    try:
+        from app.capital import service as cap
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            acc = await cap.get_or_create_account(db)
+            await cap.reset_circuit_breaker(db, acc)
+            wk = await cap.start_week(db, acc)
+            mo = await cap.apply_monthly_deposit(db, acc)
+            logger.info(f"⏰ Scheduler: morning capital - weekly={wk}, monthly={mo}, equity={cap.equity(acc)}")
+    except Exception as e:
+        logger.error(f"⏰ Scheduler: morning capital FAILED - {e}")
+
+
+async def job_daily_cycle():
+    """20:00 BRT: paper-broker fills/exits + new Risk-Engine-approved orders for tomorrow's open."""
+    try:
+        from app.database import AsyncSessionLocal
+        from app.execution.pipeline import run_daily_cycle
+        async with AsyncSessionLocal() as db:
+            out = await run_daily_cycle(db)
+            logger.info(f"⏰ Scheduler: daily cycle done - equity={out['equity']}, "
+                        f"approved={out['decisions']['approved']}/{out['decisions']['evaluated']}")
+    except Exception as e:
+        logger.error(f"⏰ Scheduler: daily cycle FAILED - {e}")
+
+
 async def job_collect_intraday():
     """Scheduled job: collect intraday (1h) candles after market close."""
     logger.info("⏰ Scheduler: Starting intraday candle collection")
@@ -161,6 +189,21 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # Morning capital routine - weekdays 07:00 BRT (weekly/monthly deposit are idempotent)
+    scheduler.add_job(
+        job_morning_capital,
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=0, timezone=settings.MARKET_TIMEZONE),
+        id="morning_capital", name="Capital: deposits + breaker reset", replace_existing=True, misfire_grace_time=3600,
+    )
+
+    # Daily trading cycle - weekdays after all data/ML/news jobs (default 20:00 BRT)
+    scheduler.add_job(
+        job_daily_cycle,
+        CronTrigger(day_of_week="mon-fri", hour=settings.DAILY_CYCLE_HOUR, minute=settings.DAILY_CYCLE_MINUTE,
+                    timezone=settings.MARKET_TIMEZONE),
+        id="daily_cycle", name="Paper trading daily cycle", replace_existing=True, misfire_grace_time=3600,
+    )
+
     # Weekend catch-up - Saturday at 10:00 BRT
     scheduler.add_job(
         job_weekend_catchup,
@@ -176,7 +219,7 @@ def setup_scheduler():
         misfire_grace_time=7200,
     )
 
-    logger.info("⏰ Scheduler configured with 5 jobs:")
+    logger.info("⏰ Scheduler configured with 7 jobs:")
     logger.info("  - Daily candles: Mon-Fri 18:30 BRT")
     logger.info("  - Intraday candles: Mon-Fri 18:45 BRT")
     logger.info("  - Weekend catch-up: Sat 10:00 BRT")

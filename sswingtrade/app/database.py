@@ -4,7 +4,8 @@ FASE 1: PostgreSQL + SQLAlchemy ORM + Alembic migrations
 """
 
 import asyncio
-from typing import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -91,6 +92,16 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             yield session
         finally:
             await session.close()
+
+
+@asynccontextmanager
+async def session_scope(session: Optional[AsyncSession] = None):
+    """Use the given session (caller owns it) or open a fresh one."""
+    if session is not None:
+        yield session
+    else:
+        async with AsyncSessionLocal() as s:
+            yield s
 
 
 # ============================================================================

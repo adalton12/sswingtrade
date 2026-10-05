@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: SSWingTrade
+    orgId: 1
+    folder: SSWingTrade
+    type: file
+    disableDeletion: false
+    options:
+      path: /var/lib/grafana/dashboards

@@ -259,6 +259,13 @@ class Order(Base):
     status = Column(Enum(OrderStatus), default=OrderStatus.PENDING)
     execution_date = Column(DateTime, nullable=True)
 
+    # Paper trading (FASE 8): fill happens at the OPEN of the first candle after signal_date
+    signal_date = Column(DateTime, nullable=True)
+    stop_loss_price = Column(Numeric(10, 2), nullable=True)
+    take_profit_price = Column(Numeric(10, 2), nullable=True)
+    atr_value = Column(Numeric(10, 4), nullable=True)
+    extra_data = Column("metadata", JSON)  # scores, model id, risk checks
+
     # Costs
     fees = Column(Numeric(10, 2), default=0)
 
@@ -358,6 +365,35 @@ class TechnicalIndicator(Base):
     volume_change = Column(Float)
     volume_ratio = Column(Float)
     technical_score = Column(Float)  # 0-100
+
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
+class DecisionLog(Base):
+    """100% of trade decisions (approved or not) with scores and risk checks - FASE 8."""
+    __tablename__ = "decision_log"
+    __table_args__ = (
+        Index("ix_decision_account_date", "account_id", "signal_date"),
+        Index("ix_decision_ticker", "ticker"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    ticker = Column(String(10), nullable=False)
+    signal_date = Column(DateTime, nullable=False)
+
+    technical_score = Column(Float)
+    news_score = Column(Float)
+    ml_probability = Column(Float)
+    volume_momentum_score = Column(Float)
+    composite_score = Column(Float)
+
+    approved = Column(Boolean, nullable=False, default=False)
+    reasons = Column(JSON)          # why rejected / adjustments
+    checks = Column(JSON)           # every risk rule with pass/fail
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
+    ml_model_id = Column(String(120), nullable=True)
+    details = Column(JSON)
 
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 

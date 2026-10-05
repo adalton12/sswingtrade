@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, session_scope
 from app.models import MarketCandle, TechnicalIndicator
 from app.quant.indicators import compute_all, technical_score
 from app.services.logger import logger
@@ -25,16 +25,16 @@ INDICATOR_COLS = [
 ]
 
 
-async def load_candles_df(ticker: str, limit: int = 400) -> pd.DataFrame:
+async def load_candles_df(ticker: str, limit: int = 400, session=None) -> pd.DataFrame:
     """Last `limit` daily candles as OHLCV DataFrame (ascending dates)."""
-    async with AsyncSessionLocal() as session:
+    async with session_scope(session) as s:
         stmt = (
             select(MarketCandle)
             .where(MarketCandle.ticker == ticker.upper())
             .order_by(MarketCandle.date.desc())
             .limit(limit)
         )
-        candles = (await session.execute(stmt)).scalars().all()
+        candles = (await s.execute(stmt)).scalars().all()
 
     if not candles:
         return pd.DataFrame()

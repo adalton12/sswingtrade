@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agents.news.analyst import NewsAnalyst
 from app.config import settings
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, session_scope
 from app.llm.client import LLMError
 from app.models import NewsEvent
 from app.services.logger import logger
@@ -130,17 +130,17 @@ def aggregate_news_score(rows: List[dict], now: Optional[datetime] = None, half_
     return {"news_score": round(50 + 50 * (num / den), 1), "n_news": n, "weight": round(den, 4)}
 
 
-async def get_news(ticker: str, days: int = 7, limit: int = 50) -> List[NewsEvent]:
+async def get_news(ticker: str, days: int = 7, limit: int = 50, session=None) -> List[NewsEvent]:
     cutoff = datetime.utcnow() - timedelta(days=days)
-    async with AsyncSessionLocal() as s:
+    async with session_scope(session) as s:
         return list((await s.execute(
             select(NewsEvent).where(NewsEvent.ticker == ticker.upper(), NewsEvent.event_date >= cutoff)
             .order_by(NewsEvent.event_date.desc()).limit(limit)
         )).scalars().all())
 
 
-async def news_score(ticker: str, days: int = 5) -> dict:
-    rows = await get_news(ticker, days)
+async def news_score(ticker: str, days: int = 5, session=None) -> dict:
+    rows = await get_news(ticker, days, session=session)
     out = aggregate_news_score([{"sentiment_score": r.sentiment_score, "impact_score": r.impact_score,
                                  "confidence": r.confidence, "event_date": r.event_date} for r in rows])
     out.update(ticker=ticker.upper(), days=days)

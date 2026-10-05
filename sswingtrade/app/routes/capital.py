@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -193,52 +193,125 @@ async def check_capital_allocation(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # Circuit breaker check
-    if account.daily_loss_triggered:
-        return CapitalAllocationResponse(
-            account_id=req.account_id,
-            requested_amount=req.operation_amount,
-            approved_amount=0,
-            available_balance=float(account.available_balance),
-            is_approved=False,
-            reason="Daily loss limit exceeded - circuit breaker active",
-            daily_remaining=0,
-            weekly_remaining=float(account.available_balance),
-        )
+    from app.capital.rules import daily_budget
+    from app.capital.service import equity as _equity, exposure_and_spent
 
-    # Daily limit check
-    daily_limit = float(account.daily_limit_per_operation)
-    daily_remaining = daily_limit - 0  # TODO: Query today's operations
-
-    # Available balance check
+    eq = _equity(account)
+    budget = daily_budget(eq)
+    st = await exposure_and_spent(db, account, datetime.combine(datetime.utcnow().date(), datetime.min.time()))
     available = float(account.available_balance)
+    daily_remaining = max(0.0, budget - st["daily_spent"])
+    weekly_remaining = max(0.0, min(available, eq - st["exposure"]))
 
-    # Determine approval
-    approved_amount = min(
-        req.operation_amount,
-        available,
-        daily_limit,
-    )
+    def resp(approved_amount, ok, reason=None):
+        return CapitalAllocationResponse(
+            account_id=req.account_id, requested_amount=req.operation_amount, approved_amount=round(approved_amount, 2),
+            available_balance=available, is_approved=ok, reason=reason,
+            daily_remaining=round(daily_remaining, 2), weekly_remaining=round(weekly_remaining, 2))
 
-    is_approved = approved_amount == req.operation_amount
+    if account.daily_loss_triggered:
+        return resp(0, False, "Daily loss limit exceeded - circuit breaker active")
 
+    approved = min(req.operation_amount, daily_remaining, weekly_remaining, available)
+    ok = approved >= req.operation_amount - 1e-9
     reason = None
-    if not is_approved:
+    if not ok:
         if available < req.operation_amount:
             reason = f"Insufficient balance. Available: R$ {available:.2f}"
-        elif daily_limit < req.operation_amount:
-            reason = f"Daily limit exceeded. Remaining: R$ {daily_remaining:.2f}"
+        elif daily_remaining < req.operation_amount:
+            reason = f"Daily budget exceeded. Remaining: R$ {daily_remaining:.2f} (budget R$ {budget:.2f})"
+        else:
+            reason = f"Exposure limit exceeded. Room: R$ {weekly_remaining:.2f}"
+    return resp(approved, ok, reason)
 
-    return CapitalAllocationResponse(
-        account_id=req.account_id,
-        requested_amount=req.operation_amount,
-        approved_amount=approved_amount,
-        available_balance=available,
-        is_approved=is_approved,
-        reason=reason,
-        daily_remaining=daily_remaining,
-        weekly_remaining=float(account.available_balance),
-    )
+
+# ============================================================================
+# FASE 7 - working capital, compounding, sizing
+# ============================================================================
+
+class DepositRequest(BaseModel):
+    amount: float = Field(..., gt=0)
+    description: str = ""
+
+
+class SizingRequest(BaseModel):
+    price: float = Field(..., gt=0)
+    stop_price: Optional[float] = Field(None, gt=0)
+    split: int = Field(1, ge=1, le=10)
+
+
+@router.get("/summary")
+async def capital_summary(db: AsyncSession = Depends(get_db)) -> dict:
+    """Equity, cash, exposure, today's budget and circuit-breaker state of the default account."""
+    from app.capital import service as cap
+    from app.capital.rules import CapitalRules, daily_budget
+
+    acc = await cap.get_or_create_account(db)
+    eq = cap.equity(acc)
+    today = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    st = await cap.exposure_and_spent(db, acc, today)
+    cb = await cap.refresh_circuit_breaker(db, acc)
+    deposited = float((await db.execute(
+        select(func.coalesce(func.sum(CapitalHistory.amount), 0)).where(
+            CapitalHistory.account_id == acc.id,
+            CapitalHistory.event_type.in_(["deposit", "weekly_deposit", "monthly_deposit"])))).scalar_one())
+    return {
+        "account_id": acc.id, "equity": eq, "cash": float(acc.available_balance), "invested_cost": float(acc.invested_capital),
+        "total_deposited": round(deposited, 2), "net_profit": round(eq - deposited, 2),
+        "return_on_deposits_pct": round((eq / deposited - 1) * 100, 2) if deposited else None,
+        "total_gains": float(acc.total_gains), "total_losses": float(acc.total_losses),
+        "per_operation_budget_today": daily_budget(eq), "per_op_pct": CapitalRules().per_op_pct,
+        "daily_spent": st["daily_spent"], "exposure": st["exposure"], "open_positions": st["open_positions"],
+        "circuit_breaker": cb,
+    }
+
+
+@router.post("/deposit")
+async def manual_deposit(req: DepositRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.capital import service as cap
+    acc = await cap.get_or_create_account(db)
+    bal = await cap.deposit(db, acc, req.amount, "deposit", req.description or "Manual deposit")
+    return {"equity": bal}
+
+
+@router.post("/week/start")
+async def start_week(db: AsyncSession = Depends(get_db)) -> dict:
+    """Add this week's working capital (idempotent per ISO week)."""
+    from app.capital import service as cap
+    acc = await cap.get_or_create_account(db)
+    bal = await cap.start_week(db, acc)
+    return {"applied": bal is not None, "equity": cap.equity(acc)}
+
+
+@router.post("/sizing")
+async def sizing_preview(req: SizingRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """How many shares the capital rules allow right now (before the Risk Engine)."""
+    from app.capital import service as cap
+    from app.capital.rules import size_position
+    acc = await cap.get_or_create_account(db)
+    today = datetime.combine(datetime.utcnow().date(), datetime.min.time())
+    st = await cap.exposure_and_spent(db, acc, today)
+    r = size_position(cap.equity(acc), float(acc.available_balance), st["exposure"], st["daily_spent"],
+                      req.price, req.stop_price, req.split)
+    return r.__dict__
+
+
+@router.get("/projection")
+async def projection(weeks: int = Query(26, ge=1, le=260), weekly_return_pct: float = Query(1.0, ge=-20, le=20),
+                     start_equity: Optional[float] = Query(None, gt=0),
+                     db: AsyncSession = Depends(get_db)) -> dict:
+    """What-if compound simulation (NOT a forecast). Uses configured weekly/monthly deposits."""
+    from app.capital import service as cap
+    from app.capital.rules import compound_projection
+    start = start_equity
+    if start is None:
+        start = cap.equity(await cap.get_or_create_account(db))
+    wd = settings.WEEKLY_DEPOSIT if settings.WEEKLY_DEPOSIT_ENABLED else 0.0
+    md = settings.MONTHLY_DEPOSIT if settings.MONTHLY_DEPOSIT_ENABLED else 0.0
+    rows = compound_projection(start, weeks, weekly_return_pct, wd, md)
+    return {"assumptions": {"start_equity": start, "weekly_return_pct": weekly_return_pct,
+                            "weekly_deposit": wd, "monthly_deposit": md},
+            "disclaimer": "Hypothetical compounding, not a prediction of results.", "projection": rows}
 
 
 @router.get("/account/{account_id}/history", response_model=List[CapitalHistoryResponse])

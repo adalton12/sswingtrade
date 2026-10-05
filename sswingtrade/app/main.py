@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import engine, get_db, init_db
-from app.routes import health, capital, market_data, indicators, backtest, ml, news
+from app.routes import health, capital, market_data, indicators, backtest, ml, news, trading, dashboard
 from app.services.logger import setup_logging
 from app.services.cache import cache
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -49,6 +49,12 @@ async def lifespan(app: FastAPI):
         # Initialize database schema
         await init_db()
         logger.info("✅ Database initialized")
+
+        # Ensure the default paper account exists (FASE 7)
+        from app.capital import service as capital_service
+        from app.database import AsyncSessionLocal
+        async with AsyncSessionLocal() as _s:
+            await capital_service.get_or_create_account(_s)
 
         # Connect Redis (non-fatal: cache helpers degrade gracefully)
         try:
@@ -127,6 +133,8 @@ app.include_router(indicators.router, prefix="/api/v1/indicators", tags=["Indica
 app.include_router(backtest.router, prefix="/api/v1/backtest", tags=["Backtesting"])
 app.include_router(ml.router, prefix="/api/v1/ml", tags=["Machine Learning"])
 app.include_router(news.router, prefix="/api/v1/news", tags=["News & LLM Agents"])
+app.include_router(trading.router, prefix="/api/v1/trading", tags=["Paper Trading"])
+app.include_router(dashboard.router, tags=["Dashboard"])
 
 
 # ============================================================================
