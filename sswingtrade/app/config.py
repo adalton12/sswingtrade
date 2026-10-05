@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # ========== Ollama (Local LLM) ==========
     OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "qwen:3b"  # Lightweight model for CPU/GPU local inference
+    OLLAMA_MODEL: str = "qwen2.5:3b"  # Lightweight model for CPU/GPU local inference
     OLLAMA_TIMEOUT: int = 30  # seconds
 
     # ========== Trading Capital Management ==========
@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     DEFAULT_DAYS_BACK: int = 60  # Default history window for initial sync
     INTRADAY_DEFAULT_PERIOD: str = "5d"  # Default period for intraday data
     INTRADAY_DEFAULT_INTERVAL: str = "1h"  # Default intraday interval
+
+    # ========== FASE 6: News / LLM batch ==========
+    NEWS_AUTO_FETCH: bool = True          # fetch Google News RSS in the nightly batch
+    NEWS_LOOKBACK_DAYS: int = 5
+    LLM_BATCH_LIMIT: int = 40             # max news analysed per batch run (CPU inference is slow)
 
     # ========== FASE 5: ML ==========
     ML_MODEL_PATH: str = "/app/models"

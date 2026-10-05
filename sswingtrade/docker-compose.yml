@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # PostgreSQL database for market data, orders, capital tracking
   postgres:
@@ -56,7 +54,7 @@ services:
       retries: 3
     networks:
       - sswingtrade-net
-    # Note: Run manually after startup: docker exec sswingtrade-ollama ollama pull qwen:3b
+    # Note: Run manually after startup: docker exec sswingtrade-ollama ollama pull qwen2.5:3b
 
   # FastAPI application
   api:

@@ -60,6 +60,19 @@ async def job_compute_indicators():
         logger.error(f"⏰ Scheduler: Indicator computation FAILED - {e}")
 
 
+async def job_news_batch():
+    """Scheduled job: RSS fetch + batch LLM analysis (after market close, never per tick)."""
+    if not settings.ENABLE_LLM_ANALYSIS:
+        return
+    logger.info("⏰ Scheduler: Starting news batch")
+    try:
+        from app.services.news_service import run_news_batch
+        result = await run_news_batch(DEFAULT_TICKERS)
+        logger.info(f"⏰ Scheduler: News batch done - {result}")
+    except Exception as e:
+        logger.error(f"⏰ Scheduler: News batch FAILED - {e}")
+
+
 async def job_collect_intraday():
     """Scheduled job: collect intraday (1h) candles after market close."""
     logger.info("⏰ Scheduler: Starting intraday candle collection")
@@ -138,6 +151,16 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # News + LLM batch - weekdays at 19:30 BRT
+    scheduler.add_job(
+        job_news_batch,
+        CronTrigger(day_of_week="mon-fri", hour=19, minute=30, timezone=settings.MARKET_TIMEZONE),
+        id="news_batch",
+        name="News + LLM Batch Analysis",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     # Weekend catch-up - Saturday at 10:00 BRT
     scheduler.add_job(
         job_weekend_catchup,
@@ -153,7 +176,7 @@ def setup_scheduler():
         misfire_grace_time=7200,
     )
 
-    logger.info("⏰ Scheduler configured with 4 jobs:")
+    logger.info("⏰ Scheduler configured with 5 jobs:")
     logger.info("  - Daily candles: Mon-Fri 18:30 BRT")
     logger.info("  - Intraday candles: Mon-Fri 18:45 BRT")
     logger.info("  - Weekend catch-up: Sat 10:00 BRT")
