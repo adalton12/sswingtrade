@@ -66,6 +66,7 @@ class MarketCandle(Base):
     __table_args__ = (
         Index("ix_candle_ticker_date", "ticker", "date"),
         Index("ix_candle_date", "date"),
+        UniqueConstraint("ticker", "date", name="uq_candle_ticker_date"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -261,6 +262,61 @@ class Order(Base):
     # Relationships
     account = relationship("Account", back_populates="orders")
     position = relationship("Position", back_populates="orders")
+
+
+# ============================================================================
+# Intraday Candles & Collection Log (FASE 2)
+# ============================================================================
+
+class IntradayCandle(Base):
+    """
+    Intraday OHLCV candles (hourly) for more granular analysis.
+    Complements daily candles for entry/exit timing in swing trades.
+    """
+    __tablename__ = "intraday_candles"
+    __table_args__ = (
+        Index("ix_intraday_ticker_datetime", "ticker", "datetime"),
+        Index("ix_intraday_datetime", "datetime"),
+        UniqueConstraint("ticker", "datetime", "interval", name="uq_intraday_ticker_dt_interval"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String(10), nullable=False)
+    datetime = Column(DateTime, nullable=False)
+    interval = Column(String(10), nullable=False, default="1h")  # 1h, 15m, 5m
+    open_price = Column(Numeric(10, 2), nullable=False)
+    high_price = Column(Numeric(10, 2), nullable=False)
+    low_price = Column(Numeric(10, 2), nullable=False)
+    close_price = Column(Numeric(10, 2), nullable=False)
+    volume = Column(Integer, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CollectionLog(Base):
+    """
+    Logs each data collection run for observability and debugging.
+    Tracks success/failure, rows collected, and timing.
+    """
+    __tablename__ = "collection_logs"
+    __table_args__ = (
+        Index("ix_collection_log_date", "started_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    collection_type = Column(String(50), nullable=False)  # daily, intraday, manual
+    tickers_requested = Column(JSON, nullable=False)  # List of tickers
+    tickers_succeeded = Column(JSON)  # Tickers that succeeded
+    tickers_failed = Column(JSON)  # Tickers that failed
+    total_rows_inserted = Column(Integer, default=0)
+    total_rows_updated = Column(Integer, default=0)
+    status = Column(String(20), nullable=False, default="running")  # running, completed, failed
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    metadata_extra = Column(JSON)  # Additional context
 
 
 # ============================================================================

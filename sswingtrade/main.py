@@ -17,6 +17,7 @@ from app.config import settings
 from app.database import engine, get_db, init_db
 from app.routes import health, capital, market_data
 from app.services.logger import setup_logging
+from app.services.scheduler import start_scheduler, stop_scheduler
 
 # Setup logging
 logger = setup_logging(__name__)
@@ -47,11 +48,20 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("✅ Database initialized")
 
+        # Start market data scheduler (FASE 2)
+        if settings.SCHEDULER_ENABLED:
+            await start_scheduler()
+            logger.info("✅ Market data scheduler started")
+
     except Exception as e:
-        logger.error(f"❌ Failed to initialize database: {e}")
+        logger.error(f"❌ Failed to initialize: {e}")
         raise
 
     yield
+
+    # Shutdown scheduler
+    if settings.SCHEDULER_ENABLED:
+        await stop_scheduler()
 
     logger.info("🛑 Shutting down SSWingTrade Application")
 

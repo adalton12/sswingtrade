@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     MARKET_DATA_UPDATE_FREQUENCY: str = "daily"  # daily, hourly
     MARKET_TIMEZONE: str = "America/Sao_Paulo"  # B3 timezone
 
+    # ========== FASE 2: Data Collection ==========
+    SCHEDULER_ENABLED: bool = True  # Enable/disable automatic data collection
+    DAILY_COLLECTION_HOUR: int = 18  # Hour (BRT) to collect daily candles
+    DAILY_COLLECTION_MINUTE: int = 30  # Minute to collect daily candles
+    INTRADAY_COLLECTION_HOUR: int = 18  # Hour (BRT) to collect intraday candles
+    INTRADAY_COLLECTION_MINUTE: int = 45
+    DEFAULT_DAYS_BACK: int = 60  # Default history window for initial sync
+    INTRADAY_DEFAULT_PERIOD: str = "5d"  # Default period for intraday data
+    INTRADAY_DEFAULT_INTERVAL: str = "1h"  # Default intraday interval
+
     # ========== Monitoring & Observability ==========
     PROMETHEUS_ENABLED: bool = True
     PROMETHEUS_METRICS_PORT: int = 9090
