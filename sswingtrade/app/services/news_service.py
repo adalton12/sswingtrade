@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agents.news.analyst import NewsAnalyst
 from app.config import settings
+from app.runtime.params import params
 from app.database import AsyncSessionLocal, session_scope
 from app.llm.client import LLMError
 from app.models import NewsEvent
@@ -52,7 +53,7 @@ def parse_google_news_rss(xml_text: str) -> List[dict]:
 
 
 async def fetch_rss_news(ticker: str, days: Optional[int] = None) -> List[dict]:
-    days = days or settings.NEWS_LOOKBACK_DAYS
+    days = days or params.get("news.lookback_days")
     q = quote(f"{ticker.upper()} acoes when:{days}d")
     url = f"https://news.google.com/rss/search?q={q}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
     async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
@@ -80,7 +81,7 @@ async def ingest_news(ticker: str, items: List[dict]) -> dict:
 
 # ---------------------------------------------------------------- batch analysis
 async def analyze_pending(limit: Optional[int] = None, analyst: Optional[NewsAnalyst] = None) -> dict:
-    limit = limit or settings.LLM_BATCH_LIMIT
+    limit = limit or params.get("news.batch_limit")
     analyst = analyst or NewsAnalyst()
     done, failed = 0, 0
     async with AsyncSessionLocal() as s:
@@ -150,7 +151,7 @@ async def news_score(ticker: str, days: int = 5, session=None) -> dict:
 async def run_news_batch(tickers: List[str]) -> dict:
     """Nightly job: fetch RSS (optional) -> dedupe/insert -> LLM analysis in batch."""
     fetched = {"inserted": 0, "duplicates": 0, "errors": 0}
-    if settings.NEWS_AUTO_FETCH:
+    if params.get("news.auto_fetch"):
         for t in tickers:
             try:
                 r = await ingest_news(t, await fetch_rss_news(t))

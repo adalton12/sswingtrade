@@ -16,7 +16,7 @@ from app.ml.predictor import predict_latest
 from app.ml.trainer import train
 from app.models import MLModel
 from app.services.indicator_service import load_candles_df
-from app.services.market_data_collector import DEFAULT_TICKERS
+from app.runtime.params import universe
 
 router = APIRouter()
 
@@ -48,7 +48,7 @@ async def targets() -> dict:
 async def train_model(req: TrainRequest, db: AsyncSession = Depends(get_db)) -> dict:
     if req.target not in TARGETS:
         raise HTTPException(400, f"target must be one of {list(TARGETS)}")
-    data = await _load(req.tickers or DEFAULT_TICKERS)
+    data = await _load(req.tickers or universe())
     if not data:
         raise HTTPException(404, "No candles. Run POST /api/v1/market/sync/daily with days_back >= 500 first.")
     try:
@@ -101,7 +101,7 @@ async def predict_all(target: str = Query("y_3d_2pct"), limit: int = Query(10, g
                       db: AsyncSession = Depends(get_db)) -> dict:
     """Tickers ranked by calibrated probability for the latest candle."""
     m = await _active(db, target)
-    preds = predict_latest(m.path, await _load(DEFAULT_TICKERS))
+    preds = predict_latest(m.path, await _load(universe()))
     rank = sorted(({"ticker": t, **p} for t, p in preds.items()), key=lambda r: -r["probability"])
     return {"model_id": m.model_id, "target": target, "description": TARGETS[target], "ranking": rank[:limit]}
 

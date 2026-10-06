@@ -13,16 +13,25 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional
 
-from app.config import settings
+from app.runtime.params import params
 
 
 @dataclass
 class CapitalRules:
-    per_op_pct: float = settings.MAX_DAILY_ALLOCATION / settings.MAX_WEEKLY_CAPITAL
-    max_entries_per_day: int = settings.MAX_ENTRIES_PER_DAY
+    """Fractions (0.2 = 20%). Defaults are static; the live values come from `from_params()`."""
+    per_op_pct: float = 0.20
+    max_entries_per_day: int = 5
     max_exposure_pct: float = 1.0
-    max_risk_per_trade_pct: float = settings.MAX_RISK_PER_TRADE_PCT
-    fee_rate: float = settings.FEE_RATE
+    max_risk_per_trade_pct: float = 2.0     # percent of equity
+    fee_rate: float = 0.000325
+
+    @classmethod
+    def from_params(cls) -> "CapitalRules":
+        return cls(per_op_pct=params.get("capital.per_op_pct") / 100,
+                   max_entries_per_day=params.get("capital.max_entries_per_day"),
+                   max_exposure_pct=params.get("capital.max_exposure_pct") / 100,
+                   max_risk_per_trade_pct=params.get("risk.max_risk_per_trade_pct"),
+                   fee_rate=params.get("costs.fee_rate_pct") / 100)
 
 
 @dataclass
@@ -37,15 +46,19 @@ class SizingResult:
 
 
 def daily_budget(equity: float, rules: Optional[CapitalRules] = None) -> float:
-    rules = rules or CapitalRules()
+    rules = rules or CapitalRules.from_params()
     return round(max(0.0, equity) * rules.per_op_pct, 2)
 
 
 def size_position(equity: float, cash: float, exposure: float, daily_spent: float, price: float,
                   stop_price: Optional[float] = None, split: int = 1,
-                  rules: Optional[CapitalRules] = None) -> SizingResult:
-    """How many shares can be bought under every capital limit."""
-    rules = rules or CapitalRules()
+                  rules: Optional[CapitalRules] = None, max_loss_amount: Optional[float] = None) -> SizingResult:
+    """
+    How many shares can be bought under every capital limit.
+    `max_loss_amount` = what is still allowed to lose in the tightest day/week/month loss limit:
+    the loss if the stop is hit must fit inside it.
+    """
+    rules = rules or CapitalRules.from_params()
     reasons: List[str] = []
     if price <= 0:
         return SizingResult(0, 0.0, 0.0, 0.0, 0.0, "invalid_price", ["invalid price"])
@@ -61,6 +74,8 @@ def size_position(equity: float, cash: float, exposure: float, daily_spent: floa
     if stop_price is not None and stop_price < price:
         risk_cap = equity * rules.max_risk_per_trade_pct / 100
         qtys["risk_per_trade"] = int(math.floor(risk_cap / (price - stop_price)))
+        if max_loss_amount is not None:
+            qtys["loss_limit"] = int(math.floor(max(0.0, max_loss_amount) / (price - stop_price)))
 
     binding = min(qtys, key=qtys.get)
     qty = max(0, qtys[binding])

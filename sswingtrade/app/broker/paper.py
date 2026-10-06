@@ -18,7 +18,7 @@ from app.backtesting.costs import CostModel
 from app.backtesting.engine import _exit_for_day
 from app.broker.base import BrokerInterface, OrderRequest
 from app.capital import service as cap
-from app.config import settings
+from app.runtime.params import params
 from app.models import (Account, MarketCandle, Order, OperationType, OrderStatus, Position, PositionStatus)
 from app.risk.engine import RiskApproval, RiskViolation, verify_approval
 from app.services.logger import logger
@@ -33,8 +33,9 @@ class PaperBroker(BrokerInterface):
 
     def __init__(self, db: AsyncSession, account: Account, costs: Optional[CostModel] = None):
         self.db, self.account = db, account
-        self.costs = costs or CostModel(fee_rate=settings.FEE_RATE, brokerage=settings.BROKERAGE_PER_ORDER,
-                                        slippage_bps=settings.SLIPPAGE_BPS)
+        self.costs = costs or CostModel(fee_rate=params.get("costs.fee_rate_pct") / 100,
+                                        brokerage=params.get("costs.brokerage"),
+                                        slippage_bps=params.get("costs.slippage_bps"))
 
     # ------------------------------------------------------------------ orders
     async def submit_order(self, req: OrderRequest, approval: RiskApproval) -> Order:
@@ -65,6 +66,17 @@ class PaperBroker(BrokerInterface):
         return list((await self.db.execute(select(MarketCandle).where(and_(
             MarketCandle.ticker == ticker, MarketCandle.date > after)).order_by(MarketCandle.date.asc()))).scalars().all())
 
+    def _affordable_qty(self, wanted: int, cash: float, entry: float) -> int:
+        """Largest qty <= wanted whose cost (notional + fees + brokerage, each rounded to cents) fits in `cash`."""
+        unit = entry * (1 + self.costs.fee_rate) + 1e-12
+        qty = min(wanted, int(math.floor(max(0.0, cash - self.costs.brokerage) / unit)))
+        while qty >= 1:
+            notional = round(entry * qty, 2)
+            if notional + round(self.costs.fees(notional), 2) <= cash + 1e-9:
+                break
+            qty -= 1
+        return max(qty, 0)
+
     # ------------------------------------------------------------------ fills
     async def process_pending(self) -> List[dict]:
         """Fill pending BUY orders at the next candle's open."""
@@ -75,14 +87,13 @@ class PaperBroker(BrokerInterface):
         for o in pending:
             candles = await self._candles_after(o.ticker, o.signal_date)
             if not candles:
-                if (datetime.utcnow() - o.created_at) > timedelta(days=settings.ORDER_EXPIRY_DAYS):
+                if (datetime.utcnow() - o.created_at) > timedelta(days=3):
                     o.status = OrderStatus.CANCELLED
                     events.append({"order_id": o.id, "ticker": o.ticker, "event": "expired"})
                 continue
             c = candles[0]
             entry = round(self.costs.buy_price(_f(c.open_price)), 2)
-            cash = _f(self.account.available_balance)
-            qty = min(o.quantity, int(math.floor(cash / (entry * (1 + self.costs.fee_rate) + 1e-12))))
+            qty = self._affordable_qty(o.quantity, _f(self.account.available_balance), entry)
             if qty < 1:
                 o.status = OrderStatus.REJECTED
                 events.append({"order_id": o.id, "ticker": o.ticker, "event": "rejected_no_cash"})
@@ -90,10 +101,15 @@ class PaperBroker(BrokerInterface):
             notional = round(entry * qty, 2)
             fees = round(self.costs.fees(notional), 2)
             risk = max(_f(o.target_price) - _f(o.stop_loss_price), 0.0)
-            rr = (_f(o.take_profit_price) - _f(o.target_price)) / risk if risk > 0 else settings.TAKE_PROFIT_RATIO
+            rr = (_f(o.take_profit_price) - _f(o.target_price)) / risk if risk > 0 else params.get("risk.risk_reward")
             stop, tp = round(entry - risk, 2), round(entry + rr * risk, 2)   # keep decided distances
 
-            await cap.reserve_for_buy(self.db, self.account, notional, fees, {"ticker": o.ticker, "order_id": o.id})
+            try:
+                await cap.reserve_for_buy(self.db, self.account, notional, fees, {"ticker": o.ticker, "order_id": o.id})
+            except ValueError:      # never let one unaffordable order abort the whole daily cycle
+                o.status = OrderStatus.REJECTED
+                events.append({"order_id": o.id, "ticker": o.ticker, "event": "rejected_no_cash"})
+                continue
             meta = dict(o.extra_data or {})
             pos = Position(
                 account_id=self.account.id, ticker=o.ticker, operation_type=OperationType.BUY, quantity=qty,
@@ -135,7 +151,7 @@ class PaperBroker(BrokerInterface):
                 if c.date <= last_checked:
                     continue
                 res = _exit_for_day({"stop": _f(p.stop_loss_price), "tp": _f(p.take_profit_price),
-                                     "entry_idx": 0, "max_hold": settings.MAX_HOLD_DAYS},
+                                     "entry_idx": 0, "max_hold": params.get("risk.max_hold_days")},
                                     _f(c.open_price), _f(c.high_price), _f(c.low_price), _f(c.close_price), i, self.costs)
                 if res:
                     events.append(await self._close(p, res[0], res[1], c.date))

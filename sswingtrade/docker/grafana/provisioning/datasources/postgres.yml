@@ -11,6 +11,6 @@ datasources:
       database: sswingtrade
       sslmode: disable
       postgresVersion: 1600
-      timescaledb: true
+      timescaledb: false
     secureJsonData:
       password: trading_dev_pwd

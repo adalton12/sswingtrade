@@ -23,6 +23,7 @@
   .scroll{overflow-x:auto} canvas{max-height:280px}
   button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px}
   button.sec{background:transparent;color:var(--txt);border:1px solid var(--line)} button:disabled{opacity:.5;cursor:wait}
+  a.badge{text-decoration:none;color:var(--acc);border-color:var(--acc)}
   footer{padding:16px;text-align:center;color:var(--mut);font-size:12px}
   #err{display:none;background:rgba(255,92,92,.12);border:1px solid var(--neg);color:var(--neg);border-radius:8px;padding:8px 12px}
 </style>
@@ -30,7 +31,8 @@
 <body>
 <header>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-    <h1>SSWingTrade</h1><span id="mode" class="badge">—</span><span id="cb" class="badge">disjuntor</span>
+    <h1>SSWingTrade</h1><span id="mode" class="badge">—</span><span id="cb" class="badge">disjuntor</span><span id="prof" class="badge">perfil</span>
+    <a class="badge" href="/settings">⚙ Parâmetros</a><a class="badge" href="/forecast">📈 Provisão</a>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
     <span id="upd" class="mut"></span>
@@ -50,6 +52,7 @@
     <div class="card kpi"><div class="l">Orçamento por operação hoje</div><div class="v" id="k_bud">—</div></div>
   </section>
 
+  <section class="card"><h2>Limites de perda (realizado)</h2><div class="scroll"><table id="t_lim"></table></div></section>
   <section class="card"><h2>Evolução do patrimônio</h2><canvas id="chart"></canvas></section>
 
   <div class="grid2">
@@ -84,7 +87,14 @@ function render(d){
   const cb = $("cb"); cb.textContent = d.circuit_breaker.tripped ? "disjuntor ATIVO" : "disjuntor ok";
   cb.className = "badge " + (d.circuit_breaker.tripped ? "bad" : "ok");
   cb.title = "Perda do dia: " + brl(d.circuit_breaker.daily_pnl) + " (" + d.circuit_breaker.daily_loss_pct + "%)";
+  if(d.circuit_breaker.tripped) cb.textContent = "disjuntor ATIVO (" + (d.circuit_breaker.tripped_periods.join(", ") || "manual") + ")";
 
+  $("prof").textContent = "perfil: " + (d.profile || "—");
+  const per = {day:"Dia", week:"Semana", month:"Mês"}, P = (d.circuit_breaker.periods || {});
+  fillTable("t_lim", ["Período","P&L","Perda","Limite","Restante","Estado"],
+    Object.keys(per).filter(k => P[k]).map(k => [[per[k]],[brl(P[k].pnl), cls(P[k].pnl)],[brl(P[k].loss)],
+      [P[k].limit == null ? "sem limite" : brl(P[k].limit)],[P[k].remaining == null ? "—" : brl(P[k].remaining)],
+      [P[k].tripped ? "BLOQUEADO" : "ok", P[k].tripped ? "neg" : "pos"]]));
   setKpi("k_eq", brl(d.mark_to_market_equity));
   setKpi("k_np", brl(d.net_profit), cls(d.net_profit));
   setKpi("k_ret", pct(d.return_pct), cls(d.return_pct));

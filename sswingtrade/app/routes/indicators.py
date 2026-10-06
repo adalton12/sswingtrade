@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.services.indicator_service import compute_many, get_latest_indicators
-from app.services.market_data_collector import DEFAULT_TICKERS
+from app.runtime.params import universe
 
 router = APIRouter()
 
@@ -25,14 +25,14 @@ def _to_dict(i) -> dict:
 @router.post("/compute")
 async def compute_indicators(request: ComputeRequest) -> dict:
     """Compute and store indicators (needs >= 60 daily candles per ticker)."""
-    return await compute_many(request.tickers or DEFAULT_TICKERS, request.days)
+    return await compute_many(request.tickers or universe(), request.days)
 
 
 @router.get("/ranking")
 async def ranking(min_score: float = Query(0, ge=0, le=100), limit: int = Query(10, ge=1, le=50)) -> dict:
     """Tickers ranked by their latest technical score."""
     rows = []
-    for t in DEFAULT_TICKERS:
+    for t in universe():
         latest = await get_latest_indicators(t, 1)
         if latest and latest[0].technical_score is not None and latest[0].technical_score >= min_score:
             rows.append({"ticker": t, "date": latest[0].date.isoformat(),
@@ -60,10 +60,10 @@ async def get_score(ticker: str) -> dict:
     out = {"ticker": ticker.upper(), "date": r.date.isoformat(),
            "technical_score": r.technical_score, "close": r.close, "rsi_14": r.rsi_14}
     if r.atr_14 and r.close:
-        from app.config import settings
-        stop = r.close - settings.STOP_LOSS_ATR_MULTIPLIER * r.atr_14
+        from app.runtime.params import params
+        stop = r.close - params.get("risk.atr_stop_mult") * r.atr_14
         risk = r.close - stop
         out["suggested"] = {"stop_loss": round(stop, 2),
-                            "take_profit": round(r.close + settings.TAKE_PROFIT_RATIO * risk, 2),
+                            "take_profit": round(r.close + params.get("risk.risk_reward") * risk, 2),
                             "atr_14": round(r.atr_14, 4)}
     return out

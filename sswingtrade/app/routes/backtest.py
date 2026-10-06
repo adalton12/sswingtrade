@@ -17,7 +17,7 @@ from app.backtesting.strategies import STRATEGIES, build_strategy
 from app.database import get_db
 from app.models import BacktestRun
 from app.services.indicator_service import load_candles_df
-from app.services.market_data_collector import DEFAULT_TICKERS
+from app.runtime.params import params, universe
 
 router = APIRouter()
 
@@ -29,17 +29,22 @@ class BacktestRequest(BaseModel):
     tickers: Optional[List[str]] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
-    initial_capital: float = Field(500.0, gt=0)
-    per_trade_allocation: float = Field(100.0, gt=0)
+    # None = take the value from the system parameters (/settings)
+    initial_capital: Optional[float] = Field(None, gt=0)
+    per_trade_allocation: Optional[float] = Field(None, gt=0)
     dynamic_sizing: bool = True
-    monthly_deposit: float = Field(0.0, ge=0)
-    max_open_positions: int = Field(5, ge=1, le=20)
-    max_hold_days: int = Field(5, ge=1, le=30)
-    atr_stop_mult: float = Field(1.5, gt=0)
-    risk_reward: float = Field(2.0, gt=0)
-    slippage_bps: float = Field(5.0, ge=0)
-    fee_rate: float = Field(0.000325, ge=0)
-    brokerage: float = Field(0.0, ge=0)
+    monthly_deposit: Optional[float] = Field(None, ge=0)
+    max_open_positions: Optional[int] = Field(None, ge=1, le=30)
+    max_hold_days: Optional[int] = Field(None, ge=1, le=30)
+    atr_stop_mult: Optional[float] = Field(None, gt=0)
+    risk_reward: Optional[float] = Field(None, gt=0)
+    slippage_bps: Optional[float] = Field(None, ge=0)
+    fee_rate: Optional[float] = Field(None, ge=0)
+    brokerage: Optional[float] = Field(None, ge=0)
+
+
+def _pick(v, key, scale=1.0):
+    return v if v is not None else params.get(key) * scale
 
 
 @router.get("/strategies")
@@ -54,7 +59,7 @@ async def run(req: BacktestRequest, db: AsyncSession = Depends(get_db)) -> dict:
     except (ValueError, TypeError) as e:
         raise HTTPException(400, str(e))
 
-    tickers = [t.upper() for t in (req.tickers or DEFAULT_TICKERS)]
+    tickers = [t.upper() for t in (req.tickers or universe())]
     data = {}
     for t in tickers:
         df = await load_candles_df(t, limit=2000)
@@ -69,12 +74,21 @@ async def run(req: BacktestRequest, db: AsyncSession = Depends(get_db)) -> dict:
     if not data:
         raise HTTPException(404, "Not enough candles (need >= 70 per ticker). Run POST /api/v1/market/sync/daily first.")
 
+    init = _pick(req.initial_capital, "capital.initial_capital")
+    per_trade = req.per_trade_allocation if req.per_trade_allocation is not None else round(
+        init * params.get("capital.per_op_pct") / 100, 2)
     cfg = BacktestConfig(
-        initial_capital=req.initial_capital, per_trade_allocation=req.per_trade_allocation,
-        dynamic_sizing=req.dynamic_sizing, monthly_deposit=req.monthly_deposit,
-        max_open_positions=req.max_open_positions, max_hold_days=req.max_hold_days,
-        atr_stop_mult=req.atr_stop_mult, risk_reward=req.risk_reward,
-        costs=CostModel(fee_rate=req.fee_rate, brokerage=req.brokerage, slippage_bps=req.slippage_bps),
+        initial_capital=init, per_trade_allocation=per_trade,
+        dynamic_sizing=req.dynamic_sizing,
+        monthly_deposit=req.monthly_deposit if req.monthly_deposit is not None else (
+            params.get("capital.monthly_deposit") if params.get("capital.monthly_deposit_enabled") else 0.0),
+        max_open_positions=_pick(req.max_open_positions, "capital.max_open_positions"),
+        max_hold_days=_pick(req.max_hold_days, "risk.max_hold_days"),
+        atr_stop_mult=_pick(req.atr_stop_mult, "risk.atr_stop_mult"),
+        risk_reward=_pick(req.risk_reward, "risk.risk_reward"),
+        costs=CostModel(fee_rate=_pick(req.fee_rate, "costs.fee_rate_pct", 0.01),
+                        brokerage=_pick(req.brokerage, "costs.brokerage"),
+                        slippage_bps=_pick(req.slippage_bps, "costs.slippage_bps")),
     )
     result = run_backtest(data, strat, cfg)
     m = result["metrics"]

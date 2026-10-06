@@ -10,14 +10,14 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from app.config import settings
+from app.runtime.params import params
 
 
 def ml_score(probability: Optional[float], full_scale: Optional[float] = None) -> Optional[float]:
     """Calibrated probability -> 0..100 (probability == full_scale maps to 100)."""
     if probability is None or np.isnan(probability):
         return None
-    full = full_scale or settings.ML_PROB_FULL_SCALE
+    full = full_scale or params.get("score.ml_prob_full_scale")
     return float(max(0.0, min(100.0, probability / full * 100)))
 
 
@@ -50,8 +50,8 @@ def composite_score(technical: Optional[float], news: Optional[float], ml: Optio
             vals[name] = 50.0
         else:
             vals[name] = float(max(0.0, min(100.0, v)))
-    w = {"technical": settings.W_TECHNICAL, "news": settings.W_NEWS, "ml": settings.W_ML,
-         "volume_momentum": settings.W_VOLUME_MOMENTUM}
+    w = {"technical": params.get("score.w_technical"), "news": params.get("score.w_news"),
+         "ml": params.get("score.w_ml"), "volume_momentum": params.get("score.w_volume")}
     total_w = sum(w.values()) or 1.0
     comp = sum(vals[k] * w[k] for k in w) / total_w
     return ScoreBreakdown(vals["technical"], vals["news"], vals["ml"], vals["volume_momentum"],

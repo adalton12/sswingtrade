@@ -3,7 +3,7 @@ Capital management routes.
 Handles account setup, balance tracking, and allocation queries.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.runtime.params import params
 from app.database import get_db
 from app.models import Account, CapitalHistory
 
@@ -25,7 +26,7 @@ router = APIRouter()
 class AccountCreateRequest(BaseModel):
     """Create account request."""
     user_id: str = Field(..., min_length=1, max_length=100)
-    initial_capital: float = Field(default=settings.INITIAL_CAPITAL)
+    initial_capital: Optional[float] = Field(default=None, gt=0)  # None = parameter capital.initial_capital
 
 
 class AccountResponse(BaseModel):
@@ -103,12 +104,13 @@ async def create_account(
             detail=f"Account already exists for user {req.user_id}"
         )
 
+    cap0 = req.initial_capital if req.initial_capital is not None else params.get("capital.initial_capital")
     # Create new account
     account = Account(
         user_id=req.user_id,
-        initial_capital=req.initial_capital,
-        current_balance=req.initial_capital,
-        available_balance=req.initial_capital,
+        initial_capital=cap0,
+        current_balance=cap0,
+        available_balance=cap0,
     )
 
     db.add(account)
@@ -119,10 +121,10 @@ async def create_account(
     history = CapitalHistory(
         account_id=account.id,
         event_type="deposit",
-        amount=req.initial_capital,
+        amount=cap0,
         balance_before=0,
-        balance_after=req.initial_capital,
-        description=f"Account creation with initial capital: R$ {req.initial_capital:.2f}"
+        balance_after=cap0,
+        description=f"Account creation with initial capital: R$ {cap0:.2f}"
     )
     db.add(history)
     await db.commit()
@@ -254,13 +256,13 @@ async def capital_summary(db: AsyncSession = Depends(get_db)) -> dict:
     deposited = float((await db.execute(
         select(func.coalesce(func.sum(CapitalHistory.amount), 0)).where(
             CapitalHistory.account_id == acc.id,
-            CapitalHistory.event_type.in_(["deposit", "weekly_deposit", "monthly_deposit"])))).scalar_one())
+            CapitalHistory.event_type.in_(["deposit", "weekly_deposit", "monthly_deposit", "planned_deposit"])))).scalar_one())
     return {
         "account_id": acc.id, "equity": eq, "cash": float(acc.available_balance), "invested_cost": float(acc.invested_capital),
         "total_deposited": round(deposited, 2), "net_profit": round(eq - deposited, 2),
         "return_on_deposits_pct": round((eq / deposited - 1) * 100, 2) if deposited else None,
         "total_gains": float(acc.total_gains), "total_losses": float(acc.total_losses),
-        "per_operation_budget_today": daily_budget(eq), "per_op_pct": CapitalRules().per_op_pct,
+        "per_operation_budget_today": daily_budget(eq), "per_op_pct": CapitalRules.from_params().per_op_pct,
         "daily_spent": st["daily_spent"], "exposure": st["exposure"], "open_positions": st["open_positions"],
         "circuit_breaker": cb,
     }
@@ -292,7 +294,8 @@ async def sizing_preview(req: SizingRequest, db: AsyncSession = Depends(get_db))
     today = datetime.combine(datetime.utcnow().date(), datetime.min.time())
     st = await cap.exposure_and_spent(db, acc, today)
     r = size_position(cap.equity(acc), float(acc.available_balance), st["exposure"], st["daily_spent"],
-                      req.price, req.stop_price, req.split)
+                      req.price, req.stop_price, req.split,
+                      max_loss_amount=(await cap.refresh_circuit_breaker(db, acc))["remaining_allowance"])
     return r.__dict__
 
 
@@ -306,8 +309,8 @@ async def projection(weeks: int = Query(26, ge=1, le=260), weekly_return_pct: fl
     start = start_equity
     if start is None:
         start = cap.equity(await cap.get_or_create_account(db))
-    wd = settings.WEEKLY_DEPOSIT if settings.WEEKLY_DEPOSIT_ENABLED else 0.0
-    md = settings.MONTHLY_DEPOSIT if settings.MONTHLY_DEPOSIT_ENABLED else 0.0
+    wd = params.get("capital.weekly_deposit") if params.get("capital.weekly_deposit_enabled") else 0.0
+    md = params.get("capital.monthly_deposit") if params.get("capital.monthly_deposit_enabled") else 0.0
     rows = compound_projection(start, weeks, weekly_return_pct, wd, md)
     return {"assumptions": {"start_equity": start, "weekly_return_pct": weekly_return_pct,
                             "weekly_deposit": wd, "monthly_deposit": md},
@@ -346,3 +349,52 @@ async def get_capital_history(
         )
         for h in history_items
     ]
+
+
+# ============================================================================
+# Variable deposits + loss limits
+# ============================================================================
+class PlannedDepositRequest(BaseModel):
+    due_date: date
+    amount: float = Field(..., gt=0)
+    note: str = ""
+
+
+@router.get("/planned-deposits")
+async def list_planned_deposits(db: AsyncSession = Depends(get_db)) -> dict:
+    from app.capital import service as cap
+    from app.models import PlannedDeposit
+    acc = await cap.get_or_create_account(db)
+    rows = (await db.execute(select(PlannedDeposit).where(PlannedDeposit.account_id == acc.id)
+                             .order_by(PlannedDeposit.due_date))).scalars().all()
+    return {"planned_deposits": [{"id": r.id, "due_date": r.due_date.date().isoformat(), "amount": float(r.amount),
+                                  "note": r.note, "applied": r.applied} for r in rows]}
+
+
+@router.post("/planned-deposits")
+async def create_planned_deposit(req: PlannedDepositRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Schedule a deposit of ANY amount on ANY date (applied by the morning job, or immediately if already due)."""
+    from app.capital import service as cap
+    acc = await cap.get_or_create_account(db)
+    pd_ = await cap.add_planned_deposit(db, acc, req.due_date, req.amount, req.note)
+    applied = await cap.apply_planned_deposits(db, acc)
+    return {"id": pd_.id, "applied_now": [a for a in applied if a["id"] == pd_.id]}
+
+
+@router.delete("/planned-deposits/{pid}")
+async def delete_planned_deposit(pid: int, db: AsyncSession = Depends(get_db)) -> dict:
+    from app.models import PlannedDeposit
+    row = await db.get(PlannedDeposit, pid)
+    if not row or row.applied:
+        raise HTTPException(404, "pending planned deposit not found")
+    await db.delete(row)
+    await db.commit()
+    return {"deleted": pid}
+
+
+@router.get("/loss-limits")
+async def loss_limits(db: AsyncSession = Depends(get_db)) -> dict:
+    """Day / week / month realised P&L vs configured limits (percent and/or fixed R$)."""
+    from app.capital import service as cap
+    acc = await cap.get_or_create_account(db)
+    return await cap.refresh_circuit_breaker(db, acc)

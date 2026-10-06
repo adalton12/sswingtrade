@@ -21,14 +21,13 @@ from app.broker.base import OrderRequest
 from app.broker.paper import PaperBroker
 from app.capital import service as cap
 from app.capital.rules import CapitalRules
-from app.config import settings
+from app.runtime.params import params, universe
 from app.ml.predictor import predict_latest
 from app.models import DecisionLog, MLModel, TickerInfo
 from app.risk.engine import AccountState, RiskEngine, TradeRequest
 from app.risk.scoring import composite_score, ml_score, volume_momentum_score
 from app.services.indicator_service import indicators_with_score, load_candles_df
 from app.services.logger import logger
-from app.services.market_data_collector import DEFAULT_TICKERS
 from app.services.news_service import news_score
 
 MIN_CANDLES = 70
@@ -39,7 +38,7 @@ def _nan_to_none(v):
 
 
 async def _active_ml(db) -> Optional[MLModel]:
-    return (await db.execute(select(MLModel).where(MLModel.target == settings.ML_SCORE_TARGET, MLModel.is_active == True)
+    return (await db.execute(select(MLModel).where(MLModel.target == params.get("ml.target"), MLModel.is_active == True)
                              .order_by(MLModel.trained_at.desc()))).scalars().first()
 
 
@@ -61,7 +60,8 @@ async def gather_inputs(db, tickers: List[str]) -> Dict[str, dict]:
 
 async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: bool = False,
                         advocate_scores: Optional[Dict[str, float]] = None) -> dict:
-    tickers = [t.upper() for t in (tickers or DEFAULT_TICKERS)]
+    await params.refresh(db)
+    tickers = [t.upper() for t in (tickers or universe())]
     advocate_scores = {k.upper(): v for k, v in (advocate_scores or {}).items()}
     inputs = await gather_inputs(db, tickers)
     if not inputs:
@@ -95,12 +95,13 @@ async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: b
     state = AccountState(equity=cap.equity(acc), cash=float(acc.available_balance), exposure=st0["exposure"],
                          open_positions=st0["open_positions"], open_tickers=set(st0["open_tickers"]),
                          daily_spent=st0["daily_spent"], entries_today=st0["entries_today"],
-                         circuit_breaker=bool(acc.daily_loss_triggered), daily_pnl=cb["daily_pnl"])
+                         circuit_breaker=cb["tripped"], daily_pnl=cb["daily_pnl"],
+                         remaining_loss_allowance=cb["remaining_allowance"], tripped_periods=cb["tripped_periods"])
 
     engine = RiskEngine()
     min_score = engine.cfg.min_score
     n_cands = sum(1 for s in scored if s[2].composite >= min_score)
-    split = max(1, min(settings.MAX_ENTRIES_PER_DAY, n_cands))
+    split = max(1, min(params.get("capital.max_entries_per_day"), n_cands))
     broker = PaperBroker(db, acc)
 
     decisions, approved_n = [], 0
@@ -156,6 +157,7 @@ async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: b
 
 async def run_daily_cycle(db, acc=None, tickers: Optional[List[str]] = None,
                           advocate_scores: Optional[Dict[str, float]] = None) -> dict:
+    await params.refresh(db)
     acc = acc or await cap.get_or_create_account(db)
     broker = PaperBroker(db, acc)
     fills = await broker.process_pending()

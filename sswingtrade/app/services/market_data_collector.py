@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
+from app.runtime.params import universe
 from app.database import AsyncSessionLocal
 from app.models import MarketCandle, IntradayCandle, TickerInfo, CollectionLog
 from app.services.cache import cache
@@ -276,7 +277,7 @@ async def collect_daily_candles(
     Returns:
         Collection summary with success/failure counts
     """
-    tickers = tickers or DEFAULT_TICKERS
+    tickers = tickers or universe()
     start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
     end_date = datetime.now().strftime("%Y-%m-%d")
 
@@ -380,7 +381,7 @@ async def collect_intraday_candles(
         period: yfinance period string (1d, 5d, 1mo, etc.)
         interval: Candle interval (1h, 15m, 5m)
     """
-    tickers = tickers or DEFAULT_TICKERS
+    tickers = tickers or universe()
 
     logger.info(f"Starting intraday ({interval}) collection for {len(tickers)} tickers")
 

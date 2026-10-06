@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSWingTrade — Parâmetros</title>
+<style>
+  :root{--bg:#0f1419;--card:#18202a;--line:#263241;--txt:#e6edf3;--mut:#8b9bb0;--pos:#2ecc71;--neg:#ff5c5c;--acc:#4da3ff;--warn:#f5b942}
+  @media (prefers-color-scheme: light){:root{--bg:#f4f6f9;--card:#fff;--line:#dde3ea;--txt:#18212b;--mut:#5d6b7c;--pos:#13935a;--neg:#d6383a;--acc:#1f6fd1;--warn:#b7791f}}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0} a{color:var(--acc)} main{padding:16px;display:grid;gap:16px;max-width:1100px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px} h2{font-size:14px;margin:0 0 10px;color:var(--mut)}
+  .profiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+  .prof{border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer} .prof.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+  .prof b{display:block} .prof small{color:var(--mut)} .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+  label{display:block;font-weight:600} .d{color:var(--mut);font-size:12px;font-weight:400} .u{color:var(--mut);font-size:12px}
+  input[type=number],input[type=text],input[type=time],select{width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--txt)}
+  input.mod{border-color:var(--warn)} button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer}
+  button.sec{background:transparent;color:var(--txt);border:1px solid var(--line)} .pm{font-size:11px;color:var(--warn)}
+  #msg{display:none;border-radius:8px;padding:8px 12px} #msg.ok{display:block;border:1px solid var(--pos);color:var(--pos)} #msg.bad{display:block;border:1px solid var(--neg);color:var(--neg)}
+  table{width:100%;border-collapse:collapse} th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}
+  .bar{position:sticky;bottom:0;background:var(--bg);padding:10px 0;display:flex;gap:8px;flex-wrap:wrap}
+</style></head>
+<body>
+<header><h1>Parâmetros do sistema</h1><nav><a href="/dashboard">Dashboard</a> · <a href="/forecast">Provisão</a></nav></header>
+<main>
+  <div id="msg"></div>
+  <section class="card"><h2>Perfil de agressividade (aplica várias configurações de uma vez; você pode ajustar depois)</h2><div class="profiles" id="profiles"></div></section>
+  <section class="card"><h2>Aportes planejados (qualquer valor, qualquer data)</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <input type="date" id="pd_date"><input type="number" id="pd_amt" step="0.01" min="0.01" placeholder="Valor R$" style="max-width:140px">
+      <input type="text" id="pd_note" placeholder="Observação" style="max-width:240px"><button id="pd_add">Adicionar</button></div>
+    <table id="pd_tbl"></table></section>
+  <div id="groups"></div>
+  <div class="bar"><button id="save">Salvar alterações</button><button class="sec" id="reload">Descartar</button><button class="sec" id="reset">Restaurar padrões</button></div>
+  <p class="d">Valores em % são sobre o patrimônio. Limite = 0 desliga. Se há % e R$ no mesmo limite, vale o menor. Modo real (<code>ENABLE_REAL_TRADING</code>) só muda por variável de ambiente.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id); let SNAP=null; const dirty={};
+function msg(t,ok){const m=$("msg");m.textContent=t;m.className=ok?"ok":"bad";if(ok)setTimeout(()=>{m.className="";m.style.display="none"},4000)}
+async function api(url,opt){const r=await fetch(url,opt);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||("HTTP "+r.status));return j}
+function field(f){
+  const w=document.createElement("div"),l=document.createElement("label");l.textContent=f.label;
+  if(f.profile_managed){const p=document.createElement("span");p.className="pm";p.textContent=" · perfil";l.appendChild(p)}
+  w.appendChild(l);let inp;
+  if(f.type==="bool"){inp=document.createElement("select");[["true","Sim"],["false","Não"]].forEach(([v,t])=>{const o=document.createElement("option");o.value=v;o.textContent=t;inp.appendChild(o)});inp.value=String(!!f.value)}
+  else if(f.type==="choice"){inp=document.createElement("select");f.choices.forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c;inp.appendChild(o)});inp.value=f.value}
+  else if(f.type==="tickers"){inp=document.createElement("input");inp.type="text";inp.value=(f.value||[]).join(", ")}
+  else if(f.type==="time"){inp=document.createElement("input");inp.type="time";inp.value=f.value}
+  else if(f.type==="str"){inp=document.createElement("input");inp.type="text";inp.value=f.value}
+  else{inp=document.createElement("input");inp.type="number";inp.step=f.type==="int"?"1":"any";if(f.min!=null)inp.min=f.min;if(f.max!=null)inp.max=f.max;inp.value=f.value}
+  if(f.modified)inp.classList.add("mod");
+  inp.onchange=()=>{dirty[f.key]=f.type==="bool"?inp.value==="true":f.type==="tickers"?inp.value.split(/[ ,;]+/).filter(Boolean):inp.value;inp.classList.add("mod")};
+  w.appendChild(inp);const u=document.createElement("div");u.className="d";u.textContent=[f.unit,f.desc].filter(Boolean).join(" — ");w.appendChild(u);return w}
+function render(){
+  const pr=$("profiles");pr.textContent="";
+  Object.entries(SNAP.profiles).forEach(([k,p])=>{const d=document.createElement("div");d.className="prof"+(SNAP.profile===k?" sel":"");
+    const b=document.createElement("b");b.textContent=p.label;const s=document.createElement("small");s.textContent=p.desc;
+    const v=p.values;const e=document.createElement("small");e.textContent=` ${v["capital.per_op_pct"]}%/dia · risco ${v["risk.max_risk_per_trade_pct"]}%/op · perda dia/sem/mês ${v["limits.daily_loss_pct"]}/${v["limits.weekly_loss_pct"]}/${v["limits.monthly_loss_pct"]}%`;
+    d.append(b,s,document.createElement("br"),e);
+    d.onclick=async()=>{if(!confirm("Aplicar perfil "+p.label+"?"))return;try{await api("/api/v1/settings/profile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({profile:k})});msg("Perfil aplicado",true);load()}catch(e){msg(e.message,false)}};pr.appendChild(d)});
+  if(SNAP.profile==="custom"){const c=document.createElement("div");c.className="prof sel";c.innerHTML="<b>Personalizado</b><small>Você ajustou valores manualmente.</small>";pr.appendChild(c)}
+  const g=$("groups");g.textContent="";
+  Object.entries(SNAP.groups).forEach(([name,fs])=>{const c=document.createElement("section");c.className="card";const h=document.createElement("h2");h.textContent=name;c.appendChild(h);
+    const grid=document.createElement("div");grid.className="fields";fs.forEach(f=>grid.appendChild(field(f)));c.appendChild(grid);g.appendChild(c)})}
+async function loadPD(){const j=await api("/api/v1/capital/planned-deposits");const t=$("pd_tbl");t.textContent="";
+  const hr=t.insertRow();["Data","Valor","Obs.","Status",""].forEach(x=>{const th=document.createElement("th");th.textContent=x;hr.appendChild(th)});
+  j.planned_deposits.forEach(r=>{const tr=t.insertRow();[r.due_date,r.amount.toLocaleString("pt-BR",{style:"currency",currency:"BRL"}),r.note||"",r.applied?"aplicado":"pendente"].forEach(x=>tr.insertCell().textContent=x);
+    const c=tr.insertCell();if(!r.applied){const b=document.createElement("button");b.className="sec";b.textContent="remover";b.onclick=async()=>{await api("/api/v1/capital/planned-deposits/"+r.id,{method:"DELETE"});loadPD()};c.appendChild(b)}})}
+async function load(){for(const k in dirty)delete dirty[k];try{SNAP=await api("/api/v1/settings");render();loadPD()}catch(e){msg(e.message,false)}}
+$("save").onclick=async()=>{if(!Object.keys(dirty).length)return msg("Nada para salvar",true);try{await api("/api/v1/settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({values:dirty})});msg("Parâmetros salvos",true);load()}catch(e){msg(e.message,false)}};
+$("reload").onclick=load;
+$("reset").onclick=async()=>{if(!confirm("Restaurar TODOS os parâmetros para os padrões?"))return;await api("/api/v1/settings/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});load()};
+$("pd_add").onclick=async()=>{try{await api("/api/v1/capital/planned-deposits",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({due_date:$("pd_date").value,amount:parseFloat($("pd_amt").value),note:$("pd_note").value})});$("pd_amt").value="";loadPD();msg("Aporte registrado",true)}catch(e){msg(e.message,false)}};
+load();
+</script></body></html>

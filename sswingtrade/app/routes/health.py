@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.runtime.params import params
 from app.database import get_db, check_database_health
 from app.services.cache import check_redis_health
 
@@ -73,10 +74,12 @@ async def health_check_detailed(db: AsyncSession = Depends(get_db)) -> Dict:
         "version": settings.APP_VERSION,
         "environment": settings.APP_ENV,
         "configuration": {
-            "initial_capital": float(settings.INITIAL_CAPITAL),
-            "max_daily_allocation": float(settings.MAX_DAILY_ALLOCATION),
-            "max_weekly_capital": float(settings.MAX_WEEKLY_CAPITAL),
-            "max_daily_loss_percent": settings.MAX_DAILY_LOSS_PERCENT,
+            "parameters": "see /api/v1/settings (runtime-editable)",
+            "initial_capital": params.get("capital.initial_capital"),
+            "per_op_pct": params.get("capital.per_op_pct"),
+            "profile": params.get("risk.profile"),
+            "loss_limits_pct": {"day": params.get("limits.daily_loss_pct"), "week": params.get("limits.weekly_loss_pct"),
+                                "month": params.get("limits.monthly_loss_pct")},
             "market_data_source": settings.MARKET_DATA_SOURCE,
             "ollama_model": settings.OLLAMA_MODEL,
         }

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.capital import service as cap
 from app.config import settings
+from app.runtime.params import params
 from app.database import get_db
 from app.execution.pipeline import run_daily_cycle, run_decisions
 from app.models import DecisionLog, Order, Position, PositionStatus
@@ -28,12 +29,15 @@ def _f(v):
 
 @router.get("/status")
 async def status() -> dict:
-    return {"mode": "paper", "paper_enabled": settings.ENABLE_PAPER_TRADING, "real_enabled": settings.ENABLE_REAL_TRADING,
-            "min_score": settings.MIN_SCORE_TO_TRADE, "weights": {
-                "technical": settings.W_TECHNICAL, "news": settings.W_NEWS, "ml": settings.W_ML,
-                "volume_momentum": settings.W_VOLUME_MOMENTUM},
-            "risk": {"atr_stop_mult": settings.STOP_LOSS_ATR_MULTIPLIER, "min_rr": settings.MIN_RISK_REWARD,
-                     "max_daily_loss_pct": settings.MAX_DAILY_LOSS_PERCENT, "max_open_positions": settings.MAX_OPEN_POSITIONS}}
+    g = params.get
+    return {"mode": "paper", "paper_enabled": g("risk.paper_enabled"), "real_enabled": settings.ENABLE_REAL_TRADING,
+            "profile": g("risk.profile"), "min_score": g("risk.min_score"), "weights": {
+                "technical": g("score.w_technical"), "news": g("score.w_news"), "ml": g("score.w_ml"),
+                "volume_momentum": g("score.w_volume")},
+            "risk": {"atr_stop_mult": g("risk.atr_stop_mult"), "min_rr": g("risk.min_rr"),
+                     "max_open_positions": g("capital.max_open_positions")},
+            "loss_limits": {"daily_pct": g("limits.daily_loss_pct"), "weekly_pct": g("limits.weekly_loss_pct"),
+                            "monthly_pct": g("limits.monthly_loss_pct")}}
 
 
 @router.post("/preview")
@@ -98,8 +102,16 @@ async def decisions(ticker: Optional[str] = None, approved: Optional[bool] = Non
 
 
 @router.post("/circuit-breaker/reset")
-async def reset_breaker(db: AsyncSession = Depends(get_db)) -> dict:
-    """Operator override (the scheduler also resets it every morning)."""
+async def reset_breaker(period: str = "day", db: AsyncSession = Depends(get_db)) -> dict:
+    """
+    Operator override of the CURRENT day/week/month block (the scheduler only clears the day latch each morning).
+    The loss realised so far stops counting: a fresh allowance of one full limit opens, and a ledger marker
+    (`breaker_override`) records the override. Other periods that are still blocked stay blocked.
+    """
+    if period not in cap.PERIODS:
+        raise HTTPException(400, f"period must be one of {cap.PERIODS}")
     acc = await cap.get_or_create_account(db)
-    await cap.reset_circuit_breaker(db, acc)
-    return {"circuit_breaker": False}
+    res = await cap.reset_circuit_breaker(db, acc, period, override=True)
+    cb = await cap.refresh_circuit_breaker(db, acc)
+    return {"circuit_breaker": cb["tripped"], "tripped_periods": cb["tripped_periods"],
+            "overridden": res["overridden"], "remaining_allowance": cb["remaining_allowance"]}

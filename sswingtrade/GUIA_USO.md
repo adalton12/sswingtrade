@@ -53,3 +53,34 @@ Score composto: técnico 25% + notícias 25% + ML 30% + volume/momentum 20% (com
 - O disjuntor considera só prejuízo **realizado**.
 - O Advogado do Diabo entra no Risk Engine apenas como nota pré-calculada (`advocate_scores`), nunca como chamada ao vivo.
 - Resultados de backtest/paper não garantem resultado real.
+
+---
+
+## FASE 10 — Tudo parametrizável, limites de perda e provisão de ganhos
+
+**Parâmetros em tempo de execução** (sem redeploy): tela `http://localhost:8000/settings` ou `GET/PUT /api/v1/settings`.
+Cobre capital (inicial, aporte semanal/mensal, % por operação, exposição, entradas/dia, posições), risco (stop ATR, R/R, risco por trade,
+score mínimo, veto do advogado do diabo), **limites de perda diário/semanal/mensal** (em % do patrimônio e/ou R$ fixo; 0 = desligado; vale o menor),
+pesos do score, custos, universo de ativos, notícias, horários do agendador e premissas da provisão. Valores do `.env` são só o padrão inicial.
+`ENABLE_REAL_TRADING` continua somente por variável de ambiente.
+
+**Aportes variáveis:** `POST /api/v1/capital/planned-deposits {"due_date":"2026-11-03","amount":237.90,"note":"13º"}` (ou pela tela /settings).
+Qualquer valor, qualquer data; aplicado uma única vez pelo job das 07:00 (ou na hora, se a data já chegou).
+
+**Perfis de agressividade:** conservador / moderado / agressivo / muito agressivo (`POST /api/v1/settings/profile`). Cada perfil ajusta de uma vez
+% por operação, risco por trade, stop, score mínimo, trades/semana e limites de perda; depois você pode refinar item a item (o perfil vira "personalizado").
+
+**Limites de perda:** o bloqueio é *travado* até o fim do período (dia/semana/mês) e o tamanho de cada ordem é reduzido para que o stop caiba
+no que ainda resta do limite. `GET /api/v1/capital/loss-limits`; `POST /api/v1/trading/circuit-breaker/reset?period=day|week|month` (override manual do operador: a perda já realizada naquele período
+deixa de contar e abre uma nova franquia de perda de um limite inteiro; o evento fica registrado no histórico de capital como `breaker_override`;
+períodos ainda bloqueados continuam bloqueados, então um dia travado por perda semanal precisa do override `week` também).
+O reset automático das 07:00 só limpa um bloqueio antigo: uma perda ainda acima do limite trava de novo, a rotina nunca libera folga sozinha.
+
+**Provisão de ganhos:** `/forecast` ou `POST /api/v1/forecast` (cenários pessimista/base/otimista + simulação Monte Carlo P10–P90, prob. de prejuízo,
+drawdown e de bater limites) e `GET /api/v1/forecast/compare` (todos os perfis lado a lado). A chance de acerto vem das evidências da própria IA
+(AUC e probabilidades do modelo de ML, sentimento das notícias, histórico do paper trading e backtests). Sem modelo validado, a provisão assume
+vantagem zero e mostra valor esperado levemente NEGATIVO (custos). É uma estimativa hipotética — **não é garantia de resultado**.
+
+**Atualização de banco:** há tabelas novas (`app_settings`, `planned_deposits`, `loss_limit_events`). Em ambiente de teste: `docker compose down -v && docker compose up --build`.
+
+Limitações: períodos em UTC; limites contam só P&L realizado; IR e feriados não modelados; a provisão ignora saídas por tempo e correlação entre ativos.

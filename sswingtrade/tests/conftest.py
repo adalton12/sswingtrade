@@ -6,7 +6,17 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+import pytest
+
 from app.models import Base
+from app.runtime.params import params
+
+
+@pytest.fixture(autouse=True)
+def _reset_params():
+    params.reset_cache()
+    yield
+    params.reset_cache()
 
 
 @pytest_asyncio.fixture

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.capital import service as cap
 from app.config import settings
+from app.runtime.params import params
 from app.database import get_db
 from app.models import CapitalHistory, DecisionLog, MarketCandle, Position, PositionStatus
 from app.services.scheduler import get_scheduler_status
@@ -26,6 +27,16 @@ async def page() -> str:
     return INDEX.read_text(encoding="utf-8")
 
 
+@router.get("/settings", response_class=HTMLResponse, include_in_schema=False)
+async def settings_page() -> str:
+    return (INDEX.parent / "settings.html").read_text(encoding="utf-8")
+
+
+@router.get("/forecast", response_class=HTMLResponse, include_in_schema=False)
+async def forecast_page() -> str:
+    return (INDEX.parent / "forecast.html").read_text(encoding="utf-8")
+
+
 @router.get("/api/v1/dashboard/summary")
 async def summary(db: AsyncSession = Depends(get_db)) -> dict:
     acc = await cap.get_or_create_account(db)
@@ -34,7 +45,7 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
     hist = (await db.execute(select(CapitalHistory).where(CapitalHistory.account_id == acc.id)
                              .order_by(CapitalHistory.date.asc(), CapitalHistory.id.asc()))).scalars().all()
     curve = [{"date": h.date.isoformat(), "equity": _f(h.balance_after), "event": h.event_type} for h in hist]
-    deposited = sum(_f(h.amount) for h in hist if h.event_type in ("deposit", "weekly_deposit", "monthly_deposit"))
+    deposited = sum(_f(h.amount) for h in hist if h.event_type in ("deposit", "weekly_deposit", "monthly_deposit", "planned_deposit"))
 
     positions = (await db.execute(select(Position).where(Position.account_id == acc.id))).scalars().all()
     open_rows, unrealized = [], 0.0
@@ -69,7 +80,7 @@ async def summary(db: AsyncSession = Depends(get_db)) -> dict:
         "trades_closed": len(closed), "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else None,
         "avg_win": round(sum(_f(p.net_pnl) for p in wins) / len(wins), 2) if wins else None,
         "avg_loss": round(sum(_f(p.net_pnl) for p in closed if _f(p.net_pnl) <= 0) / max(1, len(closed) - len(wins)), 2) if closed else None,
-        "per_op_budget": round(eq * 0.2, 2), "circuit_breaker": cb,
+        "per_op_budget": round(eq * params.get("capital.per_op_pct") / 100, 2), "profile": params.get("risk.profile"), "circuit_breaker": cb,
         "equity_curve": curve, "open_positions": open_rows,
         "recent_trades": [{"ticker": p.ticker, "exit": (p.exit_date or p.entry_date).date().isoformat(),
                            "net_pnl": _f(p.net_pnl), "pct": p.pnl_percent,

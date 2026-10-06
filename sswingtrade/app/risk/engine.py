@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Set
 
 from app.capital.rules import CapitalRules, size_position
 from app.config import settings
+from app.runtime.params import params
 
 APPROVAL_TTL_SECONDS = 600
 
@@ -47,20 +48,32 @@ class AccountState:
     entries_today: int
     circuit_breaker: bool
     daily_pnl: float = 0.0
+    remaining_loss_allowance: Optional[float] = None   # R$ still allowed to lose before the tightest limit
+    tripped_periods: List[str] = field(default_factory=list)
 
 
 @dataclass
 class RiskConfig:
-    min_score: float = settings.MIN_SCORE_TO_TRADE
-    atr_stop_mult: float = settings.STOP_LOSS_ATR_MULTIPLIER
-    risk_reward: float = settings.TAKE_PROFIT_RATIO
-    min_rr: float = settings.MIN_RISK_REWARD
-    max_daily_loss_pct: float = settings.MAX_DAILY_LOSS_PERCENT
-    max_open_positions: int = settings.MAX_OPEN_POSITIONS
-    max_entries_per_day: int = settings.MAX_ENTRIES_PER_DAY
-    advocate_block_score: float = settings.ADVOCATE_BLOCK_SCORE
-    paper_enabled: bool = settings.ENABLE_PAPER_TRADING
+    min_score: float = 60.0
+    atr_stop_mult: float = 1.5
+    risk_reward: float = 2.0
+    min_rr: float = 2.0
+    max_daily_loss_pct: float = 1.5
+    max_open_positions: int = 5
+    max_entries_per_day: int = 5
+    advocate_block_score: float = 80.0
+    paper_enabled: bool = True
     real_enabled: bool = settings.ENABLE_REAL_TRADING
+
+    @classmethod
+    def from_params(cls) -> "RiskConfig":
+        g = params.get
+        return cls(min_score=g("risk.min_score"), atr_stop_mult=g("risk.atr_stop_mult"),
+                   risk_reward=g("risk.risk_reward"), min_rr=g("risk.min_rr"),
+                   max_daily_loss_pct=g("limits.daily_loss_pct"), max_open_positions=g("capital.max_open_positions"),
+                   max_entries_per_day=g("capital.max_entries_per_day"),
+                   advocate_block_score=g("risk.advocate_block_score"), paper_enabled=g("risk.paper_enabled"),
+                   real_enabled=settings.ENABLE_REAL_TRADING)
 
 
 @dataclass
@@ -122,8 +135,8 @@ def verify_approval(approval: Optional[RiskApproval], ticker: str, side: str, qt
 # ----------------------------------------------------------------------------- engine
 class RiskEngine:
     def __init__(self, cfg: Optional[RiskConfig] = None, rules: Optional[CapitalRules] = None):
-        self.cfg = cfg or RiskConfig()
-        self.rules = rules or CapitalRules()
+        self.cfg = cfg or RiskConfig.from_params()
+        self.rules = rules or CapitalRules.from_params()
 
     def evaluate(self, req: TradeRequest, st: AccountState) -> RiskDecision:
         c = self.cfg
@@ -139,7 +152,9 @@ class RiskEngine:
         check("trading_enabled", c.paper_enabled or c.real_enabled, "paper/real trading flags")
         check("long_only", req.side == "buy", f"side={req.side}")
         check("circuit_breaker", not st.circuit_breaker,
-              f"daily loss limit {c.max_daily_loss_pct}% {'reached' if st.circuit_breaker else 'ok'}")
+              (f"loss limit reached ({', '.join(st.tripped_periods) or 'manual'})" if st.circuit_breaker else "ok"))
+        if st.remaining_loss_allowance is not None:
+            check("loss_allowance", st.remaining_loss_allowance > 0, f"R$ {st.remaining_loss_allowance:.2f} left before the day/week/month limit")
         check("min_score", req.composite_score >= c.min_score,
               f"score {req.composite_score:.1f} vs min {c.min_score:.1f}")
         check("no_duplicate", ticker not in st.open_tickers, "already holds/has pending order" if ticker in st.open_tickers else "ok")
@@ -162,13 +177,18 @@ class RiskEngine:
         if atr_ok:
             risk = c.atr_stop_mult * req.atr
             stop = round(req.price - risk, 2)
-            tp = round(req.custom_take_profit if req.custom_take_profit else req.price + c.risk_reward * risk, 2)
-            rr = round((tp - req.price) / max(req.price - stop, 1e-9), 2)
+            tp_exact = req.custom_take_profit if req.custom_take_profit else req.price + c.risk_reward * risk
+            tp = round(tp_exact, 2)
+            # R:R is judged on the exact levels. Recomputing it from the cent-rounded stop/target would push a
+            # 2.00 target under a 2.00 minimum (e.g. 1.97) and veto sound trades on rounding noise alone.
+            rr_exact = (tp_exact - req.price) / max(risk, 1e-9)
+            rr = round(rr_exact, 2)
             check("stop_valid", 0 < stop < req.price, f"stop {stop}")
-            check("risk_reward", rr + 1e-9 >= c.min_rr, f"R:R {rr:.2f} vs min {c.min_rr:.2f}")
+            check("risk_reward", rr_exact + 1e-9 >= c.min_rr, f"R:R {rr:.2f} vs min {c.min_rr:.2f}")
 
         # Capital sizing (daily budget, exposure, cash, risk per trade)
-        sz = size_position(st.equity, st.cash, st.exposure, st.daily_spent, req.price, stop, req.split, self.rules)
+        sz = size_position(st.equity, st.cash, st.exposure, st.daily_spent, req.price, stop, req.split, self.rules,
+                           max_loss_amount=st.remaining_loss_allowance)
         check("sizing", sz.qty >= 1, "; ".join(sz.reasons) if sz.reasons else f"{sz.qty} sh, limit={sz.binding}")
 
         approved = not reasons

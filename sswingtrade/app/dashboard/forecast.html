@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSWingTrade — Provisão de ganhos</title>
+<style>
+  :root{--bg:#0f1419;--card:#18202a;--line:#263241;--txt:#e6edf3;--mut:#8b9bb0;--pos:#2ecc71;--neg:#ff5c5c;--acc:#4da3ff;--warn:#f5b942}
+  @media (prefers-color-scheme: light){:root{--bg:#f4f6f9;--card:#fff;--line:#dde3ea;--txt:#18212b;--mut:#5d6b7c;--pos:#13935a;--neg:#d6383a;--acc:#1f6fd1;--warn:#b7791f}}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+  h1{font-size:18px;margin:0} a{color:var(--acc)} main{padding:16px;display:grid;gap:16px;max-width:1200px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px} h2{font-size:14px;margin:0 0 10px;color:var(--mut)}
+  table{width:100%;border-collapse:collapse} th,td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap} th:first-child,td:first-child{text-align:left}
+  th{color:var(--mut);font-weight:500;font-size:12px} .pos{color:var(--pos)} .neg{color:var(--neg)} .mut{color:var(--mut)} .scroll{overflow-x:auto}
+  .warn{border:1px solid var(--warn);color:var(--warn);border-radius:8px;padding:8px 12px} .ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  select,input,button{padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--txt)} button{background:var(--acc);color:#fff;border:0;cursor:pointer}
+  canvas{max-height:320px}
+</style></head>
+<body>
+<header><h1>Provisão de ganhos (baseada nas evidências da IA)</h1><nav><a href="/dashboard">Dashboard</a> · <a href="/settings">Parâmetros</a></nav></header>
+<main>
+  <div class="warn" id="disc">—</div>
+  <section class="card"><div class="ctl">
+    <label>Perfil <select id="profile"><option value="">Configuração atual</option><option value="conservative">Conservador</option><option value="moderate">Moderado</option><option value="aggressive">Agressivo</option><option value="very_aggressive">Muito agressivo</option></select></label>
+    <label>Semanas <input type="number" id="weeks" min="1" max="260" style="width:80px"></label>
+    <label>Capital inicial R$ <input type="number" id="eq" min="1" step="any" placeholder="atual" style="width:110px"></label>
+    <button id="go">Calcular</button><button id="cmp">Comparar perfis</button><span id="st" class="mut"></span></div></section>
+  <section class="card"><h2>Origem da estimativa de acerto</h2><div id="edge"></div></section>
+  <section class="card"><h2>Cenários (acumulado no horizonte)</h2><div class="scroll"><table id="t_sc"></table></div></section>
+  <section class="card"><h2>Distribuição simulada do patrimônio (P10–P90)</h2><canvas id="chart"></canvas><div class="scroll"><table id="t_mc"></table></div></section>
+  <section class="card" id="cmpbox" style="display:none"><h2>Comparação entre perfis</h2><div class="scroll"><table id="t_cmp"></table></div></section>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);const brl=v=>v==null?"—":v.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const pc=v=>v==null?"—":(v*100).toFixed(1)+"%";const cls=v=>v>0?"pos":v<0?"neg":"";let chart;
+function fill(id,head,rows){const t=$(id);t.textContent="";const hr=t.insertRow();head.forEach(h=>{const th=document.createElement("th");th.textContent=h;hr.appendChild(th)});
+  rows.forEach(cs=>{const r=t.insertRow();cs.forEach(([x,c])=>{const td=r.insertCell();td.textContent=x;if(c)td.className=c})})}
+async function post(url,body){const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);return j}
+function req(){const b={};if($("profile").value)b.profile=$("profile").value;if($("weeks").value)b.weeks=+$("weeks").value;if($("eq").value)b.start_equity=+$("eq").value;return b}
+async function run(){$("st").textContent="calculando…";try{const d=await post("/api/v1/forecast",req());$("disc").textContent=d.disclaimer;
+  const e=d.edge;$("edge").textContent="";const p=document.createElement("p");p.textContent=`Probabilidade de acerto estimada: ${pc(e.p_win)} (equilíbrio do R/R: ${pc(e.p_breakeven)}). Valor esperado por trade: ${e.ev_per_trade_pct}% do valor negociado. Fontes: ${e.sources.join("; ")||"nenhuma (sem vantagem comprovada)"}.`;$("edge").appendChild(p);
+  e.notes.forEach(n=>{const q=document.createElement("p");q.className="neg";q.textContent=n;$("edge").appendChild(q)});
+  fill("t_sc",["Cenário","Acerto","EV/trade","Patrimônio final","Aportes","Lucro"],Object.entries(d.scenarios).map(([k,s])=>[[k],[pc(s.p_win)],[s.ev_per_trade_pct+"%",cls(s.ev_per_trade_pct)],[brl(s.final_equity)],[brl(s.total_deposited)],[brl(s.profit),cls(s.profit)]]));
+  const m=d.monte_carlo;fill("t_mc",["Métrica","Valor"],[["Lucro esperado (média)",brl(m.expected_profit)],["Lucro P10 / P50 / P90",`${brl(m.profit.p10)} / ${brl(m.profit.p50)} / ${brl(m.profit.p90)}`],
+    ["Prob. de terminar no prejuízo",pc(m.prob_loss)],["Prob. de drawdown > 20%",pc(m.prob_drawdown_20)],["Drawdown máx. mediano / P90",`${pc(m.max_drawdown_p50)} / ${pc(m.max_drawdown_p90)}`],
+    ["Trajetórias que bateram limite dia/sem/mês",`${pc(m.limit_hit_paths_pct.day)} / ${pc(m.limit_hit_paths_pct.week)} / ${pc(m.limit_hit_paths_pct.month)}`]].map(r=>[[r[0]],[r[1]]]));
+  const labels=m.fan.p50.map((_,i)=>i);const mut=getComputedStyle(document.documentElement).getPropertyValue("--mut").trim();if(chart)chart.destroy();
+  const ds=(k,c,f)=>({label:k.toUpperCase(),data:m.fan[k],borderColor:c,backgroundColor:c+"22",pointRadius:0,fill:f});
+  chart=new Chart($("chart"),{type:"line",data:{labels,datasets:[ds("p90","#2ecc71","+1"),ds("p75","#4da3ff","+1"),ds("p50","#4da3ff",false),ds("p25","#f5b942","-1"),ds("p10","#ff5c5c","-1")]},
+    options:{responsive:true,scales:{x:{title:{display:true,text:"semanas",color:mut},ticks:{color:mut}},y:{ticks:{color:mut,callback:v=>"R$ "+v}}}}});
+  $("st").textContent=d.profile+" · "+d.weeks+" semanas"}catch(e){$("st").textContent="Erro: "+e.message}}
+async function cmp(){$("st").textContent="comparando…";try{const q=new URLSearchParams();if($("weeks").value)q.set("weeks",$("weeks").value);if($("eq").value)q.set("start_equity",$("eq").value);
+  const d=await (await fetch("/api/v1/forecast/compare?"+q)).json();$("cmpbox").style.display="block";
+  fill("t_cmp",["Perfil","Lucro pess.","Lucro base","Lucro otim.","Prob. prejuízo","Prob. DD>20%","DD P90","Bateu limite sem/mês"],Object.values(d.profiles).map(p=>[[p.label],[brl(p.scenarios.pessimista.profit),cls(p.scenarios.pessimista.profit)],[brl(p.scenarios.base.profit),cls(p.scenarios.base.profit)],[brl(p.scenarios.otimista.profit),cls(p.scenarios.otimista.profit)],[pc(p.prob_loss)],[pc(p.prob_drawdown_20)],[pc(p.max_drawdown_p90)],[pc(p.limit_hit_paths_pct.week)+" / "+pc(p.limit_hit_paths_pct.month)]]));$("st").textContent=""}catch(e){$("st").textContent="Erro: "+e.message}}
+$("go").onclick=run;$("cmp").onclick=cmp;run();
+</script></body></html>

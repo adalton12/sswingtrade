@@ -12,7 +12,7 @@ from app.agents.research.analyst import ResearchAnalyst
 from app.config import settings
 from app.llm.client import LLMError, OllamaClient
 from app.services.agent_service import build_context
-from app.services.market_data_collector import DEFAULT_TICKERS
+from app.runtime.params import universe
 from app.services.news_service import (analyze_pending, fetch_rss_news, get_news, ingest_news, news_score,
                                        run_news_batch)
 
@@ -92,8 +92,8 @@ async def analyze(limit: int = Query(20, ge=1, le=100)) -> dict:
 async def batch(background: BackgroundTasks) -> dict:
     """Run the whole nightly batch (RSS -> dedupe -> LLM) in background for all default tickers."""
     _need_llm()
-    background.add_task(run_news_batch, DEFAULT_TICKERS)
-    return {"status": "started", "tickers": len(DEFAULT_TICKERS)}
+    background.add_task(run_news_batch, universe())
+    return {"status": "started", "tickers": len(universe())}
 
 
 @router.get("/{ticker}")

@@ -1,5 +1,8 @@
 services:
-  # PostgreSQL database for market data, orders, capital tracking
+  # PostgreSQL database for market data, orders, capital tracking.
+  # Plain Postgres: the app does not use TimescaleDB (no hypertables). The stock postgres image does not ship the
+  # extension, so enabling it requires image: timescale/timescaledb:latest-pg16 plus the CREATE EXTENSION line
+  # in docker/postgres/init.sql and `timescaledb: true` in the Grafana datasource.
   postgres:
     image: postgres:16-alpine
     container_name: sswingtrade-postgres
@@ -7,7 +10,6 @@ services:
       POSTGRES_USER: trading
       POSTGRES_PASSWORD: trading_dev_pwd
       POSTGRES_DB: sswingtrade
-      POSTGRES_INITDB_ARGS: "-c shared_preload_libraries=timescaledb"
     ports:
       - "5432:5432"
     volumes:

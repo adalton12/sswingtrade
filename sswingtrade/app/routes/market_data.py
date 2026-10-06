@@ -20,7 +20,7 @@ from app.services.market_data_collector import (
     collect_intraday_candles,
     get_collection_status,
     get_data_coverage,
-    DEFAULT_TICKERS,
+    universe,
 )
 from app.services.scheduler import get_scheduler_status
 
@@ -348,7 +348,7 @@ async def sync_daily_data(
     Trigger daily candle collection from yfinance.
     Runs in background for large ticker lists.
     """
-    tickers = request.tickers or DEFAULT_TICKERS
+    tickers = request.tickers or universe()
 
     if len(tickers) <= 5:
         # Small batch: run synchronously for immediate feedback
@@ -381,7 +381,7 @@ async def sync_intraday_data(
     """
     Trigger intraday candle collection from yfinance.
     """
-    tickers = request.tickers or DEFAULT_TICKERS
+    tickers = request.tickers or universe()
 
     if len(tickers) <= 5:
         result = await collect_intraday_candles(

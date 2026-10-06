@@ -15,10 +15,10 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.services.logger import logger
+from app.runtime.params import params, universe
 from app.services.market_data_collector import (
     collect_daily_candles,
     collect_intraday_candles,
-    DEFAULT_TICKERS,
 )
 
 
@@ -35,7 +35,7 @@ async def job_collect_daily():
     logger.info("⏰ Scheduler: Starting daily candle collection")
     try:
         result = await collect_daily_candles(
-            tickers=DEFAULT_TICKERS,
+            tickers=universe(),
             days_back=5,  # Last 5 days to catch any gaps
         )
         logger.info(
@@ -54,7 +54,7 @@ async def job_compute_indicators():
     logger.info("⏰ Scheduler: Computing indicators")
     try:
         from app.services.indicator_service import compute_many
-        result = await compute_many(DEFAULT_TICKERS, days=5)
+        result = await compute_many(universe(), days=5)
         logger.info(f"⏰ Scheduler: Indicators done - {len(result['computed'])} ok, {len(result['failed'])} failed")
     except Exception as e:
         logger.error(f"⏰ Scheduler: Indicator computation FAILED - {e}")
@@ -67,7 +67,7 @@ async def job_news_batch():
     logger.info("⏰ Scheduler: Starting news batch")
     try:
         from app.services.news_service import run_news_batch
-        result = await run_news_batch(DEFAULT_TICKERS)
+        result = await run_news_batch(universe())
         logger.info(f"⏰ Scheduler: News batch done - {result}")
     except Exception as e:
         logger.error(f"⏰ Scheduler: News batch FAILED - {e}")
@@ -80,10 +80,12 @@ async def job_morning_capital():
         from app.database import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
             acc = await cap.get_or_create_account(db)
-            await cap.reset_circuit_breaker(db, acc)
+            await params.refresh(db)
+            await cap.reset_circuit_breaker(db, acc, "day")   # week/month latches persist until their period ends
             wk = await cap.start_week(db, acc)
             mo = await cap.apply_monthly_deposit(db, acc)
-            logger.info(f"⏰ Scheduler: morning capital - weekly={wk}, monthly={mo}, equity={cap.equity(acc)}")
+            pl = await cap.apply_planned_deposits(db, acc)
+            logger.info(f"⏰ Scheduler: morning capital - weekly={wk}, monthly={mo}, planned={pl}, equity={cap.equity(acc)}")
     except Exception as e:
         logger.error(f"⏰ Scheduler: morning capital FAILED - {e}")
 
@@ -106,7 +108,7 @@ async def job_collect_intraday():
     logger.info("⏰ Scheduler: Starting intraday candle collection")
     try:
         result = await collect_intraday_candles(
-            tickers=DEFAULT_TICKERS,
+            tickers=universe(),
             period="5d",
             interval="1h",
         )
@@ -124,7 +126,7 @@ async def job_weekend_catchup():
     logger.info("⏰ Scheduler: Starting weekend catch-up collection")
     try:
         result = await collect_daily_candles(
-            tickers=DEFAULT_TICKERS,
+            tickers=universe(),
             days_back=30,  # Wider window on weekends
         )
         logger.info(f"⏰ Scheduler: Weekend catch-up done - {result['total_inserted']} new rows")
@@ -136,93 +138,34 @@ async def job_weekend_catchup():
 # Scheduler Lifecycle
 # ============================================================================
 
+def _hm(key: str):
+    h, m = params.get(key).split(":")
+    return int(h), int(m)
+
+
 def setup_scheduler():
-    """Configure and add all scheduled jobs."""
+    """(Re)configure all jobs from the runtime parameters. Safe to call again after a settings change."""
+    tz = settings.MARKET_TIMEZONE
+    weekdays = [
+        (job_morning_capital, "schedule.morning_time", "morning_capital", "Capital: deposits + breaker reset"),
+        (job_collect_daily, "schedule.collect_daily_time", "collect_daily_candles", "Collect Daily Candles (EOD)"),
+        (job_collect_intraday, "schedule.collect_intraday_time", "collect_intraday_candles", "Collect Intraday Candles (1h)"),
+        (job_compute_indicators, "schedule.indicators_time", "compute_indicators", "Compute Technical Indicators"),
+        (job_news_batch, "schedule.news_time", "news_batch", "News + LLM Batch Analysis"),
+        (job_daily_cycle, "schedule.cycle_time", "daily_cycle", "Paper trading daily cycle"),
+    ]
+    for fn, key, jid, name in weekdays:
+        h, m = _hm(key)
+        scheduler.add_job(fn, CronTrigger(day_of_week="mon-fri", hour=h, minute=m, timezone=tz), id=jid, name=name,
+                          replace_existing=True, misfire_grace_time=3600)
+    scheduler.add_job(job_weekend_catchup, CronTrigger(day_of_week="sat", hour=10, minute=0, timezone=tz),
+                      id="weekend_catchup", name="Weekend Data Catch-up", replace_existing=True, misfire_grace_time=7200)
+    logger.info("⏰ Scheduler configured: " + ", ".join(f"{jid}@{params.get(k)}" for _, k, jid, _ in weekdays))
 
-    # Daily candles - weekdays at 18:30 BRT (after B3 closes at ~18:00)
-    scheduler.add_job(
-        job_collect_daily,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour=18,
-            minute=30,
-            timezone=settings.MARKET_TIMEZONE,
-        ),
-        id="collect_daily_candles",
-        name="Collect Daily Candles (EOD)",
-        replace_existing=True,
-        misfire_grace_time=3600,  # 1 hour grace period
-    )
 
-    # Intraday candles - weekdays at 18:45 BRT
-    scheduler.add_job(
-        job_collect_intraday,
-        CronTrigger(
-            day_of_week="mon-fri",
-            hour=18,
-            minute=45,
-            timezone=settings.MARKET_TIMEZONE,
-        ),
-        id="collect_intraday_candles",
-        name="Collect Intraday Candles (1h)",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-
-    # Indicators - weekdays at 19:00 BRT (after daily candles)
-    scheduler.add_job(
-        job_compute_indicators,
-        CronTrigger(day_of_week="mon-fri", hour=19, minute=0, timezone=settings.MARKET_TIMEZONE),
-        id="compute_indicators",
-        name="Compute Technical Indicators",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-
-    # News + LLM batch - weekdays at 19:30 BRT
-    scheduler.add_job(
-        job_news_batch,
-        CronTrigger(day_of_week="mon-fri", hour=19, minute=30, timezone=settings.MARKET_TIMEZONE),
-        id="news_batch",
-        name="News + LLM Batch Analysis",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-
-    # Morning capital routine - weekdays 07:00 BRT (weekly/monthly deposit are idempotent)
-    scheduler.add_job(
-        job_morning_capital,
-        CronTrigger(day_of_week="mon-fri", hour=7, minute=0, timezone=settings.MARKET_TIMEZONE),
-        id="morning_capital", name="Capital: deposits + breaker reset", replace_existing=True, misfire_grace_time=3600,
-    )
-
-    # Daily trading cycle - weekdays after all data/ML/news jobs (default 20:00 BRT)
-    scheduler.add_job(
-        job_daily_cycle,
-        CronTrigger(day_of_week="mon-fri", hour=settings.DAILY_CYCLE_HOUR, minute=settings.DAILY_CYCLE_MINUTE,
-                    timezone=settings.MARKET_TIMEZONE),
-        id="daily_cycle", name="Paper trading daily cycle", replace_existing=True, misfire_grace_time=3600,
-    )
-
-    # Weekend catch-up - Saturday at 10:00 BRT
-    scheduler.add_job(
-        job_weekend_catchup,
-        CronTrigger(
-            day_of_week="sat",
-            hour=10,
-            minute=0,
-            timezone=settings.MARKET_TIMEZONE,
-        ),
-        id="weekend_catchup",
-        name="Weekend Data Catch-up",
-        replace_existing=True,
-        misfire_grace_time=7200,
-    )
-
-    logger.info("⏰ Scheduler configured with 7 jobs:")
-    logger.info("  - Daily candles: Mon-Fri 18:30 BRT")
-    logger.info("  - Intraday candles: Mon-Fri 18:45 BRT")
-    logger.info("  - Weekend catch-up: Sat 10:00 BRT")
+def reschedule():
+    """Apply new schedule.* parameters to a running scheduler."""
+    setup_scheduler()
 
 
 async def start_scheduler():

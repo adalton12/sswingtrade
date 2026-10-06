@@ -369,6 +369,44 @@ class TechnicalIndicator(Base):
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
+class AppSetting(Base):
+    """Runtime-editable parameters (key/value JSON). Env vars only provide the defaults."""
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(JSON, nullable=False)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class PlannedDeposit(Base):
+    """Variable deposits scheduled by the user (any amount, any date). Applied by the morning job."""
+    __tablename__ = "planned_deposits"
+    __table_args__ = (Index("ix_planned_deposit_date", "due_date", "applied"),)
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    due_date = Column(DateTime, nullable=False)
+    amount = Column(Numeric(15, 2), nullable=False)
+    note = Column(String(200))
+    applied = Column(Boolean, default=False, nullable=False)
+    applied_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
+class LossLimitEvent(Base):
+    """A loss limit (day/week/month) that was hit. Latches the block until the period ends."""
+    __tablename__ = "loss_limit_events"
+    __table_args__ = (UniqueConstraint("account_id", "period", "period_start", name="uq_loss_limit_period"),)
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    period = Column(String(10), nullable=False)          # day | week | month
+    period_start = Column(DateTime, nullable=False)
+    pnl = Column(Numeric(15, 2), nullable=False)
+    limit_value = Column(Numeric(15, 2), nullable=False)
+    tripped_at = Column(DateTime, default=_utcnow, nullable=False)
+
+
 class DecisionLog(Base):
     """100% of trade decisions (approved or not) with scores and risk checks - FASE 8."""
     __tablename__ = "decision_log"
