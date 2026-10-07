@@ -16,6 +16,11 @@ from app.runtime.params import BY_KEY, params
 def _reset_params(monkeypatch):
     # Most tests run on fixed historical candles: the "data too old" rule is off unless a test turns it on
     monkeypatch.setattr(BY_KEY["risk.max_data_age_bdays"], "default", 0)
+    # a real key in .env must never reach the tests (they would call the internet): cloud is off unless a test enables it
+    from app.config import settings
+    monkeypatch.setattr(settings, "OLLAMA_API_KEY", "")
+    from app.llm import factory
+    factory.reset_cooldown()
     params.reset_cache()
     yield
     params.reset_cache()

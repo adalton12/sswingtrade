@@ -6,6 +6,7 @@ from app.llm.schemas import NewsAnalysis
 
 class NewsAnalyst(BaseAgent):
     name = "news_analyst"
+    llm_role = "news"            # nightly batch: ~40 calls/day, local model unless llm.news_use_cloud is on
     schema = NewsAnalysis
     system_prompt = (
         "Voce e um analista de mercado de acoes da B3 focado em swing trade (1 a 5 dias). "

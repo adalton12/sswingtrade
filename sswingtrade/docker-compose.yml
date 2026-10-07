@@ -1,153 +1,150 @@
+# SSWingTrade - stack for running on THIS machine, unattended (paper trading only).
+#
+#   docker compose up -d --build      first start (builds the API image)
+#   docker compose ps                 everything should become "healthy"
+#   docker compose logs -f api        follow the application log
+#   docker compose down               stop (data is kept)   |   docker compose down -v  => ERASES the database
+#
+# Secrets come from the .env file next to this file (copy .env.example to .env). Nothing is hard-coded here.
+# Ollama is NOT a container: the API talks to the Ollama already installed on this PC (host.docker.internal).
+
+name: sswingtrade
+
 services:
-  # PostgreSQL database for market data, orders, capital tracking.
-  # Plain Postgres: the app does not use TimescaleDB (no hypertables). The stock postgres image does not ship the
-  # extension, so enabling it requires image: timescale/timescaledb:latest-pg16 plus the CREATE EXTENSION line
-  # in docker/postgres/init.sql and `timescaledb: true` in the Grafana datasource.
+  # ------------------------------------------------------------------ PostgreSQL
+  # Plain Postgres: the app does not use TimescaleDB (no hypertables) and the stock image does not ship it.
   postgres:
     image: postgres:16-alpine
     container_name: sswingtrade-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: trading
-      POSTGRES_PASSWORD: trading_dev_pwd
-      POSTGRES_DB: sswingtrade
+      POSTGRES_USER: ${POSTGRES_USER:-trading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is missing - copy .env.example to .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sswingtrade}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"          # this PC only (for psql / DBeaver); nothing on the network
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trading"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
       - sswingtrade-net
 
-  # Redis cache for session data and rate limiting
+  # ------------------------------------------------------------------ Redis (cache only: safe to lose)
   redis:
     image: redis:7-alpine
     container_name: sswingtrade-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is missing - copy .env.example to .env}
+    # password required, nothing persisted, capped at 128 MB; no published port (only the API reaches it)
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --save '' --appendonly no --maxmemory 128mb --maxmemory-policy allkeys-lru"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - sswingtrade-net
 
-  # Ollama for local LLM inference (News Analysis, Event Detection)
-  ollama:
-    image: ollama/ollama:latest
-    container_name: sswingtrade-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    networks:
-      - sswingtrade-net
-    # Note: Run manually after startup: docker exec sswingtrade-ollama ollama pull qwen2.5:3b
-
-  # FastAPI application
+  # ------------------------------------------------------------------ API + dashboard + scheduler
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    image: sswingtrade-api:local
     container_name: sswingtrade-api
+    restart: unless-stopped
     environment:
-      # Application
-      APP_ENV: development
-      APP_NAME: SSWingTrade
-      APP_VERSION: 0.1.0
+      # Application. APP_ENV only changes the console log format (development = readable text, production = JSON)
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_ECHO: "false"
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is missing - copy .env.example to .env}
 
-      # Database
-      DATABASE_URL: postgresql://trading:trading_dev_pwd@postgres:5432/sswingtrade
+      # Paper trading only. Pinned here on purpose: real trading must never be switched on by a stray .env line.
+      ENABLE_PAPER_TRADING: "true"
+      ENABLE_REAL_TRADING: "false"
 
-      # Redis
-      REDIS_URL: redis://redis:6379/0
+      # Services
+      DATABASE_URL: postgresql://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sswingtrade}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
 
-      # Ollama
-      OLLAMA_BASE_URL: http://ollama:11434
+      # LLM: the Ollama already installed on this PC (start it before the 19:30 news job)
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-120}
 
-      # Trading Config
-      INITIAL_CAPITAL: 500.00
-      MONTHLY_DEPOSIT: 500.00
-      MAX_DAILY_ALLOCATION: 100.00
-      MAX_WEEKLY_CAPITAL: 500.00
-      MAX_DAILY_LOSS_PERCENT: 1.5
+      # Ollama cloud (optional, empty = off). Only the API container receives the key; it is only sent to ollama.com.
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      OLLAMA_CLOUD_MODEL: ${OLLAMA_CLOUD_MODEL:-gemma4:31b}
 
-      # ML Config
+      # Starting values (everything can be changed later in http://localhost:8000/settings)
+      INITIAL_CAPITAL: ${INITIAL_CAPITAL:-500}
+      MONTHLY_DEPOSIT: ${MONTHLY_DEPOSIT:-500}
+      WEEKLY_DEPOSIT: ${WEEKLY_DEPOSIT:-500}
+      MAX_DAILY_LOSS_PERCENT: ${MAX_DAILY_LOSS_PERCENT:-1.5}
+
+      # Files
       ML_MODEL_PATH: /app/models
-
-      # Logging
-      LOG_LEVEL: DEBUG
-
+      LOG_FILE_PATH: /app/logs/sswingtrade.log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"          # http://localhost:8000/dashboard  |  /docs  |  /settings
     volumes:
-      - ./app:/app/app
-      - ./models:/app/models
+      - ./models:/app/models           # trained ML models survive rebuilds
       - ./logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama:
+    networks:
+      - sswingtrade-net
+
+  # ------------------------------------------------------------------ Grafana (reads the Postgres directly)
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: sswingtrade-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is missing - copy .env.example to .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # read by docker/grafana/provisioning/datasources/postgres.yml
+      POSTGRES_USER: ${POSTGRES_USER:-trading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-sswingtrade}
+    ports:
+      - "127.0.0.1:3000:3000"          # http://localhost:3000
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      postgres:
         condition: service_healthy
     networks:
       - sswingtrade-net
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Prometheus metrics collection
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: sswingtrade-prometheus
-    volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    ports:
-      - "9090:9090"
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    networks:
-      - sswingtrade-net
+# Prometheus was removed: the API does not expose /metrics yet, so it would only show a "down" target.
+# (docker/prometheus/prometheus.yml is kept for when metrics are implemented.)
 
-  # Grafana for visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: sswingtrade-grafana
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: false
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
-    depends_on:
-      - prometheus
-    networks:
-      - sswingtrade-net
-
+# Explicit names, different from the previous compose file ("sswingtrade_postgres_data"): a fresh database is
+# guaranteed, and an old volume (with old data and an old password) can never be picked up by mistake.
 volumes:
   postgres_data:
-  redis_data:
-  ollama_data:
-  prometheus_data:
+    name: sswingtrade_pgdata
   grafana_data:
+    name: sswingtrade_grafanadata
 
 networks:
   sswingtrade-net:

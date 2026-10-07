@@ -70,8 +70,7 @@ models/*.joblib
 models/*.h5
 models/*.pt
 
-# Docker
-.dockerignore
+# Docker (.dockerignore itself MUST be versioned: it keeps .env and tests out of the build context)
 docker-compose.override.yml
 
 # OS

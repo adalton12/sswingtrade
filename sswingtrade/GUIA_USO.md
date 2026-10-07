@@ -2,16 +2,49 @@
 
 Tudo roda em **paper trading** (simulação). `ENABLE_REAL_TRADING=false` e não existe corretora real conectada.
 
-## 1. Subir o sistema
+## 1. Subir o sistema (Docker)
+Pré-requisitos: **Docker Desktop aberto** (esperar o ícone ficar verde) e, para as notícias com IA, o **Ollama do seu PC ligado**
+(ele roda fora do Docker; o sistema o acessa por `host.docker.internal`).
+
 ```bash
-docker compose up --build -d
-docker exec sswingtrade-ollama ollama pull qwen2.5:3b     # só para os agentes de notícias (FASE 6)
+cd sswingtrade
+cp .env.example .env          # só na 1ª vez; troque cada CHANGE_ME por um valor aleatório (letras e números)
+docker compose up -d --build  # 1ª vez: 5–10 min e ~3–4 GB de disco
+docker compose ps             # postgres, redis, api e grafana devem ficar "healthy"
 ```
-- API/Swagger: http://localhost:8000/docs
-- **Dashboard:** http://localhost:8000/dashboard
-- Grafana: http://localhost:3000 (admin/admin) → pasta "SSWingTrade"
+- **Dashboard:** http://localhost:8000/dashboard · **Parâmetros:** http://localhost:8000/settings · **API/Swagger:** http://localhost:8000/docs
+- **Grafana:** http://localhost:3000 — usuário `admin` e a senha `GRAFANA_ADMIN_PASSWORD` do seu `.env` → pasta "SSWingTrade"
+- Tudo escuta só em `127.0.0.1` (esta máquina). A API ainda **não tem login**: não abra as portas para a rede.
+- Ver o log: `docker compose logs -f api` · Parar (mantém os dados): `docker compose down` · **Apagar o banco:** `docker compose down -v`
+- Conferir o Ollama: `curl http://localhost:8000/api/v1/news/llm/status` deve mostrar `"reachable": true` e `"model_installed": true`.
+  O modelo é o `OLLAMA_MODEL` do `.env` (`qwen3:8b`, o que você já tem; veja os seus com `ollama list`). Se aparecer `reachable: false`,
+  o Ollama está desligado ou o Docker não o alcança: ligue-o e, se persistir, defina a variável de usuário `OLLAMA_HOST=0.0.0.0` e reinicie o Ollama.
+- Para as rotinas diárias (coleta 18:30, notícias 19:30, ciclo 20:00) rodarem, **o PC precisa estar ligado e o Docker Desktop aberto**;
+  em Docker Desktop → Settings → General, ative "Start Docker Desktop when you sign in". Ligue o Ollama antes das 19:30.
+- Pouco espaço em disco? Depois do primeiro build: `docker builder prune -f`.
+- **Solução de problemas**
+  - `no configuration file provided`: você está na pasta errada; o prompt deve terminar em `\sswingtrade>`.
+  - Um container reinicia sem parar com `exec format error`: a imagem foi baixada corrompida (acontece com o disco quase cheio).
+    `docker pull` não resolve ("Image is up to date" só compara o identificador). Faça `docker compose down`,
+    `docker image rm <imagem>` e `docker pull <imagem>` de novo, depois `docker compose up -d`.
+  - Para ver por que um container falha: `docker logs --tail 50 sswingtrade-<postgres|redis|api|grafana>`.
+  - `/health` com `"status": "degraded"` e só o Ollama como `unhealthy` é normal quando o Ollama está desligado; o resto funciona.
 
 Se você já tinha um banco criado em fases anteriores, recrie: `docker compose down -v` (apaga os dados).
+
+### Ollama na nuvem (opcional)
+Com uma chave do Ollama, os agentes de texto (pesquisa, advogado do diabo, eventos) usam um modelo grande na nuvem (`gemma4:31b`, plano gratuito)
+e **caem sozinhos para o Ollama local** se a nuvem falhar, se a chave for recusada ou se a cota acabar (a nuvem fica em pausa por 5 min).
+1. Crie a chave em https://ollama.com/settings/keys. **Copie o valor completo na hora**: depois a tela só mostra o identificador.
+2. Cole-a no seu `.env`, na linha `OLLAMA_API_KEY=` (só ali: nunca em chat, código ou Git). Para trocar a chave, é só editar a linha.
+3. Aplique: `docker compose up -d` e confira com `curl "http://localhost:8000/api/v1/news/llm/status?probe_cloud=true"`
+   (gasta **uma** chamada mínima da cota; `"probe": {"ok": true}` = chave e modelo funcionando; `http_status: 401` = chave recusada).
+- A chave só é enviada a `https://ollama.com`, nunca ao Ollama do seu PC, e nunca aparece em log nem em resposta da API.
+- **O lote noturno de notícias (~40 chamadas por dia) fica no modelo local por padrão**, para não esgotar a cota gratuita
+  (pelas suas contas, uma chamada de 120B custa ~0,13% do mês). Mudar em `/settings`: "Lote de notícias na nuvem do Ollama".
+- Os prompts vão para os servidores do Ollama (eles dizem não usá-los para treino e não informam por quanto tempo guardam).
+  O sistema envia só manchetes e indicadores públicos; seus saldos e posições nunca entram num prompt.
+- A resposta de cada notícia guarda quem a produziu (`cloud:<modelo>` ou `local:<modelo>`).
 
 ## 2. Primeiro uso (ordem)
 1. **Dados históricos** — `POST /api/v1/market/sync/daily` com `{"days_back": 730}`

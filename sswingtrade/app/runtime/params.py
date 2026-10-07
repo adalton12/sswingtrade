@@ -96,6 +96,13 @@ DEFS: List[ParamDef] = [
     _d("news.batch_limit", "int", settings.LLM_BATCH_LIMIT, "Notícias e IA", "Notícias analisadas por lote", "Limite do processamento em lote do LLM.", 1, 500),
     _d("news.auto_fetch", "bool", settings.NEWS_AUTO_FETCH, "Notícias e IA", "Buscar notícias (RSS) automaticamente"),
     _d("ml.target", "choice", settings.ML_SCORE_TARGET, "Notícias e IA", "Alvo do ML usado no score", choices=["y_3d_2pct", "y_5d_4pct"]),
+    _d("llm.agents_use_cloud", "bool", True, "Notícias e IA", "Agentes de texto na nuvem do Ollama",
+       "Pesquisa, advogado do diabo e eventos (poucas chamadas) usam a nuvem se houver OLLAMA_API_KEY no .env. "
+       "Se a nuvem falhar ou a cota acabar, cai para o Ollama local."),
+    _d("llm.news_use_cloud", "bool", False, "Notícias e IA", "Lote de notícias na nuvem do Ollama",
+       "O lote noturno faz ~40 chamadas por dia e pode esgotar a cota gratuita. Desligado = usa o modelo local."),
+    _d("llm.cloud_model", "str", settings.OLLAMA_CLOUD_MODEL, "Notícias e IA", "Modelo na nuvem",
+       "Nome do modelo na nuvem do Ollama (ex.: gemma4:31b)."),
     # ---------------------------------------------------------------- schedule (BRT, HH:MM)
     _d("schedule.morning_time", "time", "07:00", "Agenda (horário de Brasília)", "Rotina da manhã", "Aportes e reset dos bloqueios."),
     _d("schedule.collect_daily_time", "time", "18:30", "Agenda (horário de Brasília)", "Coleta de candles diários"),

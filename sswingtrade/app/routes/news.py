@@ -12,7 +12,7 @@ from app.agents.research.analyst import ResearchAnalyst
 from app.config import settings
 from app.llm.client import LLMError, OllamaClient
 from app.services.agent_service import build_context
-from app.runtime.params import universe
+from app.runtime.params import params, universe
 from app.services.news_service import (analyze_pending, fetch_rss_news, get_news, ingest_news, news_score,
                                        run_news_batch)
 
@@ -55,9 +55,25 @@ async def _guard(coro):
 
 
 @router.get("/llm/status")
-async def llm_status() -> dict:
-    """Is Ollama up and is the model downloaded? (docker exec sswingtrade-ollama ollama pull qwen2.5:3b)"""
-    return await OllamaClient().available()
+async def llm_status(probe_cloud: bool = Query(False, description="send ONE tiny request to prove the cloud key works "
+                                                                  "(spends a little of the cloud quota)")) -> dict:
+    """
+    Local Ollama: reachable? model downloaded? (`ollama list` on the PC)
+    Cloud: is a key configured, which roles use it, and (with ?probe_cloud=true) does the key really work?
+    The key itself is never returned.
+    """
+    from app.llm.factory import cloud_enabled_for
+    out = await OllamaClient().available()                       # top-level keys kept as before (local Ollama)
+    cloud = {"configured": bool(settings.OLLAMA_API_KEY), "model": params.get("llm.cloud_model"),
+             "used_by": {"agents": cloud_enabled_for("agents"), "news_batch": cloud_enabled_for("news")}}
+    if settings.OLLAMA_API_KEY:
+        c = OllamaClient(base_url=settings.OLLAMA_CLOUD_URL, model=cloud["model"], api_key=settings.OLLAMA_API_KEY)
+        listing = await c.available()
+        cloud.update(reachable=listing["reachable"], model_listed=listing.get("model_installed"))
+        if probe_cloud:
+            cloud["probe"] = await c.probe()
+    out["cloud"] = cloud
+    return out
 
 
 @router.post("/ingest")

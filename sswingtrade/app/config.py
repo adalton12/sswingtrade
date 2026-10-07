@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:3b"  # Lightweight model for CPU/GPU local inference
     OLLAMA_TIMEOUT: int = 30  # seconds
+    # Ollama cloud (optional): create a key at https://ollama.com/settings/keys and put it in .env ONLY.
+    # Empty = cloud disabled. The key is only ever sent to OLLAMA_CLOUD_URL, never to the local Ollama.
+    OLLAMA_API_KEY: str = ""
+    OLLAMA_CLOUD_URL: str = "https://ollama.com"
+    OLLAMA_CLOUD_MODEL: str = "gemma4:31b"
 
     # ========== Trading Capital Management ==========
     INITIAL_CAPITAL: float = 500.00  # BRL
@@ -130,6 +135,8 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
+        # The same .env also feeds docker compose (POSTGRES_PASSWORD, GRAFANA_*, ...): unknown keys must not crash the app
+        extra = "ignore"
 
 
 # Global settings instance

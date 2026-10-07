@@ -1,64 +1,42 @@
-# Core Framework
+# SSWingTrade - RUNTIME dependencies (what the Docker image installs; Python 3.11).
+# Only what app/ really imports. Test/dev tools live in requirements-dev.txt.
+# Removed because nothing imports them: langchain, polars, ta, prometheus-client, python-json-logger,
+# typer, click, requests (yfinance brings its own), factory-boy and the lint/format tools.
+
+# Core framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
+python-dotenv==1.0.0
 
-# Database & ORM
+# Database & ORM (psycopg2 is imported at startup by app/database.py)
 sqlalchemy==2.0.23
+greenlet==3.0.1            # required by SQLAlchemy's asyncio extension
 psycopg2-binary==2.9.9
 asyncpg==0.29.0
 alembic==1.13.0
 
-# Data Processing
+# Data processing
 pandas==2.1.3
 numpy==1.26.2
-polars==0.19.12
 
-# Quantitative Analysis
-ta==0.10.2  # Technical Analysis library
+# Machine learning
 scikit-learn==1.3.2
-
-# Machine Learning
 xgboost==2.0.2
 lightgbm==4.1.0
 joblib==1.3.2
 
-# Market Data
-yfinance>=0.2.54
+# Market data (pinned to the version the code was verified against: Yahoo changes often)
+yfinance==1.7.0
 
-# LLM & NLP
-requests==2.31.0
+# HTTP / LLM client
 httpx==0.25.2
-langchain==0.1.0
 
-# Async & Scheduling
+# Scheduling, cache, logging
 APScheduler==3.10.4
-
-# Caching & Session
 redis==5.0.1
-
-# Monitoring & Observability
-prometheus-client==0.19.0
-python-json-logger==2.0.7
-
-# Utilities
-python-dotenv==1.0.0
-click==8.1.7
-typer==0.9.0
 loguru==0.7.2
 
-# Testing (FASE 2+)
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
-aiosqlite==0.19.0
-factory-boy==3.3.0
-
-# Development
-black==23.12.0
-flake8==6.1.0
-isort==5.13.2
-mypy==1.7.1
-pylint==3.0.3
-pre-commit==3.5.0
+# Time zone database for America/Sao_Paulo (slim images / Windows may not ship one)
+tzdata

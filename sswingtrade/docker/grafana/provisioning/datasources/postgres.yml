@@ -5,12 +5,13 @@ datasources:
     type: postgres
     access: proxy
     url: postgres:5432
-    user: trading
+    # ${...} is expanded by Grafana from the container environment (set in docker-compose.yml from .env)
+    user: ${POSTGRES_USER}
     isDefault: true
     jsonData:
-      database: sswingtrade
+      database: ${POSTGRES_DB}
       sslmode: disable
       postgresVersion: 1600
       timescaledb: false
     secureJsonData:
-      password: trading_dev_pwd
+      password: ${POSTGRES_PASSWORD}
