@@ -35,6 +35,7 @@ class TradeRequest:
     max_price: Optional[float] = None
     custom_take_profit: Optional[float] = None
     split: int = 1
+    data_age_days: Optional[int] = None    # business days since the last candle used (None = not checked)
 
 
 @dataclass
@@ -64,6 +65,7 @@ class RiskConfig:
     advocate_block_score: float = 80.0
     paper_enabled: bool = True
     real_enabled: bool = settings.ENABLE_REAL_TRADING
+    max_data_age_bdays: int = 0            # 0 = freshness rule off
 
     @classmethod
     def from_params(cls) -> "RiskConfig":
@@ -73,7 +75,7 @@ class RiskConfig:
                    max_daily_loss_pct=g("limits.daily_loss_pct"), max_open_positions=g("capital.max_open_positions"),
                    max_entries_per_day=g("capital.max_entries_per_day"),
                    advocate_block_score=g("risk.advocate_block_score"), paper_enabled=g("risk.paper_enabled"),
-                   real_enabled=settings.ENABLE_REAL_TRADING)
+                   real_enabled=settings.ENABLE_REAL_TRADING, max_data_age_bdays=g("risk.max_data_age_bdays"))
 
 
 @dataclass
@@ -151,6 +153,11 @@ class RiskEngine:
         ticker = req.ticker.upper()
         check("trading_enabled", c.paper_enabled or c.real_enabled, "paper/real trading flags")
         check("long_only", req.side == "buy", f"side={req.side}")
+        if c.max_data_age_bdays > 0 and req.data_age_days is not None:
+            check("fresh_data", req.data_age_days <= c.max_data_age_bdays,
+                  f"last candle is {req.data_age_days} business day(s) old (max {c.max_data_age_bdays}); "
+                  f"data collection may have failed" if req.data_age_days > c.max_data_age_bdays
+                  else f"last candle {req.data_age_days} business day(s) old")
         check("circuit_breaker", not st.circuit_breaker,
               (f"loss limit reached ({', '.join(st.tripped_periods) or 'manual'})" if st.circuit_breaker else "ok"))
         if st.remaining_loss_allowance is not None:

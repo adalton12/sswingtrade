@@ -67,6 +67,9 @@ DEFS: List[ParamDef] = [
     _d("risk.min_rr", "float", settings.MIN_RISK_REWARD, "Risco", "R/R mínimo aceito", "Ordens abaixo disso são vetadas.", 1, 8),
     _d("risk.min_score", "float", settings.MIN_SCORE_TO_TRADE, "Risco", "Score mínimo para operar", "Score composto 0-100.", 0, 100, profile_managed=True),
     _d("risk.max_hold_days", "int", settings.MAX_HOLD_DAYS, "Risco", "Prazo máx. da posição", "Saída por tempo (pregões).", 1, 30, unit="pregões"),
+    _d("risk.max_data_age_bdays", "int", 3, "Risco", "Idade máx. dos dados (pregões)",
+       "Recusa entradas se o último candle estiver mais velho que isto (coleta de dados falhou). 0 = desligado. "
+       "Feriados não são modelados; 3 pregões absorve o Carnaval.", 0, 30, unit="pregões"),
     _d("risk.advocate_block_score", "float", settings.ADVOCATE_BLOCK_SCORE, "Risco", "Veto do Advogado do Diabo", "Nota (0-100) a partir da qual a entrada é vetada.", 1, 100),
     _d("risk.paper_enabled", "bool", settings.ENABLE_PAPER_TRADING, "Risco", "Paper trading ligado", "Chave geral: desligada, nenhuma ordem é aprovada."),
     # ---------------------------------------------------------------- loss limits (0 = off)

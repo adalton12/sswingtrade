@@ -84,3 +84,22 @@ vantagem zero e mostra valor esperado levemente NEGATIVO (custos). É uma estima
 **Atualização de banco:** há tabelas novas (`app_settings`, `planned_deposits`, `loss_limit_events`). Em ambiente de teste: `docker compose down -v && docker compose up --build`.
 
 Limitações: períodos em UTC; limites contam só P&L realizado; IR e feriados não modelados; a provisão ignora saídas por tempo e correlação entre ativos.
+
+---
+
+## Integridade dos dados (correções da 2ª auditoria)
+
+- **Dados do dia:** a coleta pede candles até *amanhã* (o `end` do yfinance é exclusivo), então o pregão que acabou de fechar chega no mesmo dia.
+  Um candle de "hoje" antes das 18:10 (horário de Brasília) é parcial e é descartado.
+- **Histórico ajustado:** o Yahoo reescreve todo o passado a cada dividendo/split. Se um dia re-baixado diferir do guardado (>0,2% e >1 centavo),
+  o histórico completo do ativo é baixado de novo e os indicadores são recalculados. O job de sábado refaz o histórico de todos os ativos.
+  Forçar na hora: `POST /api/v1/market/sync/daily {"days_back": 730, "full_resync": true}`.
+- **Dados velhos:** nova regra do Risk Engine `fresh_data` (parâmetro `risk.max_data_age_bdays`, padrão 3 pregões, 0 = desligado) recusa entradas
+  se o último candle estiver velho demais (coleta falhou). Aparece em `/trading/decisions`.
+- **Backtest com aportes:** Sharpe, Sortino e drawdown agora usam retorno ponderado pelo tempo (aportes não contam como lucro nem escondem perdas);
+  `twr_return_pct` é o retorno puro da estratégia.
+- **Score de notícias:** uma manchete isolada de baixo impacto/confiança não leva mais o score a 0 ou 100 (encolhe para neutro com um peso prior de 0,25).
+
+**Depois de atualizar um banco que já tinha dados:** rode o `full_resync` acima, depois `POST /api/v1/indicators/compute {"days": 400}` e retreine o ML
+(`POST /api/v1/ml/train`). Resultados de paper trading e backtests anteriores foram gerados com dados atrasados/inconsistentes e com métricas distorcidas;
+compare-os com cautela ou refaça.

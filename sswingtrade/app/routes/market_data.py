@@ -71,6 +71,8 @@ class SyncRequest(BaseModel):
     """Request to sync market data."""
     tickers: Optional[List[str]] = None
     days_back: int = Field(default=60, ge=1, le=730)
+    # Re-download each ticker's whole stored history (use after dividends/splits or to repair old data)
+    full_resync: bool = False
 
 
 class SyncIntradayRequest(BaseModel):
@@ -355,6 +357,7 @@ async def sync_daily_data(
         result = await collect_daily_candles(
             tickers=tickers,
             days_back=request.days_back,
+            force_full=request.full_resync,
         )
         return {"status": "completed", "result": result}
     else:
@@ -363,6 +366,7 @@ async def sync_daily_data(
             collect_daily_candles,
             tickers=tickers,
             days_back=request.days_back,
+            force_full=request.full_resync,
         )
         return {
             "status": "started",

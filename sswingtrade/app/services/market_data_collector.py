@@ -23,6 +23,12 @@ from app.database import AsyncSessionLocal
 from app.models import MarketCandle, IntradayCandle, TickerInfo, CollectionLog
 from app.services.cache import cache
 from app.services.logger import logger
+from app.services.market_clock import drop_incomplete_today, market_now
+
+# Yahoo rewrites the WHOLE history when a dividend/split happens (auto_adjust). The incremental refresh only
+# rewrites the last days, so stored history would silently become a patchwork. When a re-fetched day differs from
+# what is stored by more than this (and more than 1 cent of rounding), the ticker's history is re-synced in full.
+ADJUSTMENT_TOLERANCE = 0.002
 
 
 # ============================================================================
@@ -93,6 +99,12 @@ def _fetch_daily_data(
             # Remove timezone info for PostgreSQL compatibility
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
+
+            # A bar dated today before the closing call is partial: never store it
+            df = drop_incomplete_today(df, market_now())
+            if df.empty:
+                logger.warning(f"Only a partial candle available for {b3_ticker}; skipped")
+                continue
 
             results[b3_ticker] = df
             logger.info(f"Fetched {len(df)} daily candles for {b3_ticker}")
@@ -259,12 +271,42 @@ async def _save_ticker_info(session: AsyncSession, info: dict):
 
 
 # ============================================================================
+# History consistency (dividend / split adjustments)
+# ============================================================================
+
+async def _stored_closes(session: AsyncSession, ticker: str, dates: List[datetime]) -> Dict[datetime, float]:
+    rows = (await session.execute(
+        select(MarketCandle.date, MarketCandle.close_price).where(
+            and_(MarketCandle.ticker == ticker, MarketCandle.date.in_(dates))))).all()
+    return {d: float(c) for d, c in rows}
+
+
+async def _needs_resync(session: AsyncSession, ticker: str, df: pd.DataFrame) -> bool:
+    """True when a freshly fetched day disagrees with the stored one => the provider re-adjusted its history."""
+    stored = await _stored_closes(session, ticker, [ts.to_pydatetime() for ts in df.index])
+    for ts, close in df["close"].items():
+        old = stored.get(ts.to_pydatetime())
+        if not old or old <= 0:
+            continue
+        new = round(float(close), 2)
+        if abs(new - old) / old > max(ADJUSTMENT_TOLERANCE, 0.012 / old):    # 0.012 = 1 cent rounding on both sides
+            logger.warning(f"{ticker}: {ts.date()} stored {old:.2f} vs fetched {new:.2f} -> history was re-adjusted")
+            return True
+    return False
+
+
+async def _oldest_stored(session: AsyncSession, ticker: str) -> Optional[datetime]:
+    return (await session.execute(select(func.min(MarketCandle.date)).where(MarketCandle.ticker == ticker))).scalar_one_or_none()
+
+
+# ============================================================================
 # Public Collection API
 # ============================================================================
 
 async def collect_daily_candles(
     tickers: Optional[List[str]] = None,
     days_back: int = 60,
+    force_full: bool = False,
 ) -> dict:
     """
     Main entry point: collect daily candles for given tickers.
@@ -273,13 +315,17 @@ async def collect_daily_candles(
     Args:
         tickers: List of B3 tickers (default: DEFAULT_TICKERS)
         days_back: How many days of history to fetch
+        force_full: re-download each ticker's WHOLE stored history (picks up dividend/split re-adjustments);
+            without it a full re-sync still happens automatically when a re-fetched day disagrees with the stored one
 
     Returns:
-        Collection summary with success/failure counts
+        Collection summary with success/failure counts (`resynced` = tickers whose full history was rewritten)
     """
     tickers = tickers or universe()
-    start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    end_date = datetime.now().strftime("%Y-%m-%d")
+    now = market_now()          # market time, not the server's: the container runs in UTC
+    start_date = (now - timedelta(days=days_back)).strftime("%Y-%m-%d")
+    # yfinance's `end` is EXCLUSIVE: ending "today" would never return today's session (data one day late)
+    end_date = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
     logger.info(f"Starting daily collection for {len(tickers)} tickers, {days_back} days back")
 
@@ -301,6 +347,7 @@ async def collect_daily_candles(
 
     succeeded = []
     failed = []
+    resynced = []
     total_inserted = 0
     total_updated = 0
 
@@ -308,6 +355,21 @@ async def collect_daily_candles(
         for ticker in tickers:
             if ticker in data and not data[ticker].empty:
                 try:
+                    if force_full or await _needs_resync(session, ticker, data[ticker]):
+                        oldest = await _oldest_stored(session, ticker)
+                        oldest_day = oldest.strftime("%Y-%m-%d") if oldest else None
+                        if oldest_day and oldest_day < start_date:
+                            # stored history is older than the window just downloaded: fetch all of it again
+                            refetched = await asyncio.to_thread(_fetch_daily_data, [ticker], oldest_day, end_date)
+                            if ticker in refetched and not refetched[ticker].empty:
+                                data[ticker] = refetched[ticker]
+                                resynced.append(ticker)
+                                logger.info(f"{ticker}: full history re-synced from {oldest_day}")
+                            else:
+                                logger.error(f"{ticker}: history re-sync failed, stored history may be inconsistent")
+                        else:
+                            resynced.append(ticker)     # the window already covers everything stored
+
                     ins, upd = await _save_daily_candles(session, ticker, data[ticker])
                     total_inserted += ins
                     total_updated += upd
@@ -358,6 +420,7 @@ async def collect_daily_candles(
         "tickers_failed": len(failed),
         "succeeded": succeeded,
         "failed": failed,
+        "resynced": resynced,
         "total_inserted": total_inserted,
         "total_updated": total_updated,
         "days_back": days_back,

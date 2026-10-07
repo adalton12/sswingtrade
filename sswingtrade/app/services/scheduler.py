@@ -30,13 +30,23 @@ scheduler = AsyncIOScheduler(timezone=settings.MARKET_TIMEZONE)
 # Scheduled Jobs
 # ============================================================================
 
+async def _recompute_after_resync(result: dict):
+    """Indicators are stored per day: after a full history re-sync (dividend/split) rebuild them all."""
+    resynced = result.get("resynced") or []
+    if not resynced:
+        return
+    from app.services.indicator_service import compute_many
+    logger.warning(f"⏰ Scheduler: history re-adjusted for {resynced}; recomputing indicators")
+    await compute_many(resynced, days=400)
+
+
 async def job_collect_daily():
     """Scheduled job: collect daily candles after market close."""
     logger.info("⏰ Scheduler: Starting daily candle collection")
     try:
         result = await collect_daily_candles(
             tickers=universe(),
-            days_back=5,  # Last 5 days to catch any gaps
+            days_back=5,  # Last 5 days to catch any gaps (a full re-sync is triggered if history was re-adjusted)
         )
         logger.info(
             f"⏰ Scheduler: Daily collection done - "
@@ -45,6 +55,7 @@ async def job_collect_daily():
             f"{result['total_inserted']} inserted, "
             f"{result['total_updated']} updated"
         )
+        await _recompute_after_resync(result)
     except Exception as e:
         logger.error(f"⏰ Scheduler: Daily collection FAILED - {e}")
 
@@ -127,9 +138,12 @@ async def job_weekend_catchup():
     try:
         result = await collect_daily_candles(
             tickers=universe(),
-            days_back=30,  # Wider window on weekends
+            days_back=30,
+            force_full=True,  # weekly safety net: re-download the whole stored history (dividends/splits)
         )
-        logger.info(f"⏰ Scheduler: Weekend catch-up done - {result['total_inserted']} new rows")
+        logger.info(f"⏰ Scheduler: Weekend catch-up done - {result['total_inserted']} new rows, "
+                    f"{len(result['resynced'])} histories refreshed")
+        await _recompute_after_resync(result)
     except Exception as e:
         logger.error(f"⏰ Scheduler: Weekend catch-up FAILED - {e}")
 

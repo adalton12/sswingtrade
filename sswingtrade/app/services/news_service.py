@@ -109,10 +109,14 @@ async def analyze_pending(limit: Optional[int] = None, analyst: Optional[NewsAna
 
 
 # ---------------------------------------------------------------- aggregation (0-100 news score)
-def aggregate_news_score(rows: List[dict], now: Optional[datetime] = None, half_life_days: float = 2.0) -> dict:
+def aggregate_news_score(rows: List[dict], now: Optional[datetime] = None, half_life_days: float = 2.0,
+                         prior_weight: float = 0.25) -> dict:
     """
     rows: dicts with sentiment_score, impact_score, confidence, event_date.
-    Weight = confidence * impact/10 * 2^(-age/half_life). Score = 50 + 50 * weighted mean sentiment.
+    Weight = confidence * impact/10 * 2^(-age/half_life).
+    Score = 50 + 50 * sum(w*s) / (sum(w) + prior_weight): a weighted mean shrunk towards neutral by a "phantom"
+    neutral article of weight `prior_weight` (= one article with confidence 0.5 and impact 5/10). Without it a
+    single weak, stale headline (weight ~0.01) would be normalised away and swing the score to 0 or 100.
     No usable news -> neutral 50 with n=0.
     """
     now = now or datetime.utcnow()
@@ -128,7 +132,7 @@ def aggregate_news_score(rows: List[dict], now: Optional[datetime] = None, half_
         n += 1
     if n == 0 or den < 1e-9:
         return {"news_score": 50.0, "n_news": n, "weight": round(den, 4)}
-    return {"news_score": round(50 + 50 * (num / den), 1), "n_news": n, "weight": round(den, 4)}
+    return {"news_score": round(50 + 50 * (num / (den + prior_weight)), 1), "n_news": n, "weight": round(den, 4)}
 
 
 async def get_news(ticker: str, days: int = 7, limit: int = 50, session=None) -> List[NewsEvent]:

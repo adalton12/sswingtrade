@@ -9,11 +9,13 @@ from sqlalchemy.pool import StaticPool
 import pytest
 
 from app.models import Base
-from app.runtime.params import params
+from app.runtime.params import BY_KEY, params
 
 
 @pytest.fixture(autouse=True)
-def _reset_params():
+def _reset_params(monkeypatch):
+    # Most tests run on fixed historical candles: the "data too old" rule is off unless a test turns it on
+    monkeypatch.setattr(BY_KEY["risk.max_data_age_bdays"], "default", 0)
     params.reset_cache()
     yield
     params.reset_cache()

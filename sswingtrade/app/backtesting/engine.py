@@ -68,7 +68,7 @@ def run_backtest(data: Dict[str, pd.DataFrame], strategy: Strategy, cfg: Optiona
     deposits = 0.0
     positions: Dict[str, dict] = {}
     trades: List[dict] = []
-    equity_curve, equity_dates = [], []
+    equity_curve, equity_dates, flow_curve = [], [], []
     last_month = None
     day_counter = {t: {d: i for i, d in enumerate(df.index)} for t, df in ohlc.items()}
 
@@ -91,9 +91,11 @@ def run_backtest(data: Dict[str, pd.DataFrame], strategy: Strategy, cfg: Optiona
 
     for d in dates:
         # monthly deposit on first trading day of the month
+        flow_today = 0.0
         if last_month is not None and (d.year, d.month) != last_month and cfg.monthly_deposit:
             cash += cfg.monthly_deposit
             deposits += cfg.monthly_deposit
+            flow_today = cfg.monthly_deposit
         last_month = (d.year, d.month)
 
         equity_open = cash + sum(p["qty"] * p["last_close"] for p in positions.values())
@@ -155,6 +157,7 @@ def run_backtest(data: Dict[str, pd.DataFrame], strategy: Strategy, cfg: Optiona
             mtm += p["qty"] * p["last_close"]
         equity_curve.append(mtm)
         equity_dates.append(d)
+        flow_curve.append(flow_today)
 
     # liquidate at the end
     if dates:
@@ -165,7 +168,8 @@ def run_backtest(data: Dict[str, pd.DataFrame], strategy: Strategy, cfg: Optiona
             equity_curve[-1] = cash
 
     equity = pd.Series(equity_curve, index=pd.DatetimeIndex(equity_dates), dtype=float)
-    metrics = compute_metrics(equity, trades, cfg.initial_capital, deposits)
+    flows = pd.Series(flow_curve, index=pd.DatetimeIndex(equity_dates), dtype=float)
+    metrics = compute_metrics(equity, trades, cfg.initial_capital, deposits, flows)
     return {
         "strategy": strategy.name,
         "metrics": metrics,

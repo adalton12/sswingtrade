@@ -28,9 +28,15 @@ from app.risk.engine import AccountState, RiskEngine, TradeRequest
 from app.risk.scoring import composite_score, ml_score, volume_momentum_score
 from app.services.indicator_service import indicators_with_score, load_candles_df
 from app.services.logger import logger
+from app.services.market_clock import business_days_stale, market_now
 from app.services.news_service import news_score
 
 MIN_CANDLES = 70
+
+
+def _today():
+    """Market-local date (seam: tests replace it to run on fixed historical candles)."""
+    return market_now().date()
 
 
 def _nan_to_none(v):
@@ -100,6 +106,10 @@ async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: b
 
     engine = RiskEngine()
     min_score = engine.cfg.min_score
+    data_age = business_days_stale(signal_date.date(), _today())
+    if engine.cfg.max_data_age_bdays and data_age > engine.cfg.max_data_age_bdays:
+        logger.warning(f"Stale market data: last candle {signal_date.date()} is {data_age} business days old "
+                       f"(max {engine.cfg.max_data_age_bdays}); every entry will be refused")
     n_cands = sum(1 for s in scored if s[2].composite >= min_score)
     split = max(1, min(params.get("capital.max_entries_per_day"), n_cands))
     broker = PaperBroker(db, acc)
@@ -115,7 +125,7 @@ async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: b
         lo, hi = bands.get(t, (None, None))
         dec = engine.evaluate(
             TradeRequest(ticker=t, side="buy", price=v["price"], atr=v["atr"], composite_score=bd.composite,
-                         advocate_counter_score=advocate_scores.get(t),
+                         advocate_counter_score=advocate_scores.get(t), data_age_days=data_age,
                          min_price=float(lo) if lo else None, max_price=float(hi) if hi else None, split=split),
             state)
         order_id = None
@@ -150,8 +160,8 @@ async def run_decisions(db, acc, tickers: Optional[List[str]] = None, dry_run: b
                           "order_id": order_id})
     if not dry_run:
         await db.commit()
-    return {"signal_date": signal_date.date().isoformat(), "dry_run": dry_run, "evaluated": len(scored),
-            "approved": approved_n, "ml_model": ml_model.model_id if ml_model else None,
+    return {"signal_date": signal_date.date().isoformat(), "data_age_bdays": data_age, "dry_run": dry_run,
+            "evaluated": len(scored), "approved": approved_n, "ml_model": ml_model.model_id if ml_model else None,
             "stale_skipped": sorted(set(inputs) - set(fresh)), "decisions": decisions}
 
 
